@@ -21,6 +21,12 @@ max_attempts_per_artist = 25
 max_attempts_per_artist_textsearch = 25
 max_attempts_per_rg = 15
 
+# Text search processing options
+# Convert artist names to lowercase before text search (e.g., Metallica -> metallica)
+artist_textsearch_lowercase = false
+# Remove symbols and diacritics from artist names (e.g., Café Tacvba -> Cafe Tacvba)
+artist_textsearch_remove_symbols = false
+
 # Circuit breaker settings (stops run if API is completely broken)
 circuit_breaker_threshold = 50
 backoff_factor = 0.5

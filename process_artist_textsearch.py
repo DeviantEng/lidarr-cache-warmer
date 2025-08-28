@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import asyncio
+import re
 import time
+import unicodedata
 import urllib.parse
 from collections import deque
 from datetime import datetime, timedelta
@@ -9,6 +11,43 @@ from typing import Dict, List, Tuple
 import aiohttp
 
 from storage import iso_now
+
+
+def process_artist_name_for_text_search(artist_name: str, convert_to_lowercase: bool = False, remove_symbols_and_diacritics: bool = False) -> str:
+    """
+    Process artist name for text search based on configuration options.
+
+    Args:
+        artist_name: Original artist name from database/API
+        convert_to_lowercase: Whether to convert to lowercase
+        remove_symbols_and_diacritics: Whether to remove symbols and diacritics
+
+    Returns:
+        Processed artist name for text search
+    """
+    processed_name = artist_name
+
+    if remove_symbols_and_diacritics:
+        # Remove diacritics (accents, umlauts, etc.)
+        processed_name = unicodedata.normalize('NFKD', processed_name)
+        processed_name = ''.join(c for c in processed_name if not unicodedata.combining(c))
+
+        # Replace common word separators with spaces
+        # This includes hyphens, underscores, dots, slashes, etc.
+        # Note: Include various types of dashes (hyphen, en-dash, em-dash, figure-dash)
+        processed_name = re.sub(r'[-_.\/\u2013\u2014\u2010\u2011]+', ' ', processed_name)
+
+        # Remove other symbols but keep alphanumeric and spaces
+        # Note: \w includes [a-zA-Z0-9_], so we need to preserve spaces explicitly
+        processed_name = re.sub(r'[^\w\s]', '', processed_name)
+
+        # Clean up multiple spaces
+        processed_name = re.sub(r'\s+', ' ', processed_name).strip()
+
+    if convert_to_lowercase:
+        processed_name = processed_name.lower()
+
+    return processed_name
 
 
 class SafeRateLimiter:
@@ -158,9 +197,12 @@ async def check_text_search_with_cache_warming(
     """
     search_url = f"{target_base_url.rstrip('/')}/search"
     total_response_time = 0
-    
-    # URL encode the artist name for the query
-    query = urllib.parse.quote_plus(artist_name.strip())
+
+    # Process artist name based on configuration options
+    processed_name = process_artist_name_for_text_search(artist_name, convert_to_lowercase, remove_symbols_and_diacritics)
+
+    # URL encode the processed artist name for the query
+    query = urllib.parse.quote_plus(processed_name.strip())
     search_params = {"type": "all", "query": query}
     
     for attempt in range(max_attempts):
@@ -233,9 +275,12 @@ async def check_text_searches_concurrent_with_timing(
             # Use offset for proper numbering across batches
             global_position = offset + i + 1
             total_to_process = offset + len(to_check)
-            
-            print(f"[{global_position}/{total_to_process}] Text search for {name} ...", end="", flush=True)
-            
+
+            # Process the name to show what we're actually searching for
+            processed_name = process_artist_name_for_text_search(name, cfg.get("artist_textsearch_lowercase", False), cfg.get("artist_textsearch_remove_symbols", False))
+
+            print(f"[{global_position}/{total_to_process}] Text search for {processed_name} -> Original: '{name}' ...", end="", flush=True)
+
             try:
                 status, last_code, attempts_used, response_time = await check_text_search_with_cache_warming(
                     session,
@@ -243,7 +288,9 @@ async def check_text_searches_concurrent_with_timing(
                     cfg["target_base_url"],
                     cfg["max_attempts_per_artist_textsearch"],
                     cfg["delay_between_attempts"],
-                    cfg["timeout_seconds"]
+                    cfg["timeout_seconds"],
+                    cfg.get("artist_textsearch_lowercase", False),
+                    cfg.get("artist_textsearch_remove_symbols", False),
                 )
                 
                 rate_limiter.release(int(last_code) if last_code.isdigit() else last_code, response_time)
@@ -352,9 +399,19 @@ def process_text_search(to_check: List[str], ledger: Dict[str, Dict], cfg: dict,
         return {"new_successes": 0, "new_failures": 0}
     
     print(f"Processing {len(to_check)} artists for text search cache warming...")
-    print(f"Settings: {cfg['max_attempts_per_artist_textsearch']} attempts, {cfg['delay_between_attempts']}s delay, "
-          f"{cfg['max_concurrent_requests']} concurrent, {cfg['rate_limit_per_second']} req/sec")
-    
+    print(f"Settings: {cfg['max_attempts_per_artist_textsearch']} attempts, {cfg['delay_between_attempts']}s delay, " f"{cfg['max_concurrent_requests']} concurrent, {cfg['rate_limit_per_second']} req/sec")
+
+    # Show text processing configuration
+    text_processing_enabled = cfg.get("artist_textsearch_lowercase", False) or cfg.get("artist_textsearch_remove_symbols", False)
+    if text_processing_enabled:
+        print("Text processing enabled:")
+        if cfg.get("artist_textsearch_lowercase", False):
+            print("  • Convert artist names to lowercase")
+        if cfg.get("artist_textsearch_remove_symbols", False):
+            print("  • Remove symbols and diacritics")
+    else:
+        print("Text processing: disabled (using original artist names)")
+
     try:
         if cfg.get("batch_size", 25) < len(to_check):
             # Use batch processing for large sets

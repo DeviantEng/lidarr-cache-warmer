@@ -27,6 +27,10 @@ max_attempts_per_artist = 25
 max_attempts_per_artist_textsearch = 25
 max_attempts_per_rg = 15
 
+# Text search processing options
+artist_textsearch_lowercase = false
+artist_textsearch_remove_symbols = false
+
 # Circuit breaker settings
 circuit_breaker_threshold = 50
 backoff_factor = 0.5
@@ -159,7 +163,9 @@ def load_config(path: str) -> dict:
         "max_attempts_per_artist": cp.getint("probe", "max_attempts_per_artist", fallback=25),
         "max_attempts_per_artist_textsearch": cp.getint("probe", "max_attempts_per_artist_textsearch", fallback=25),
         "max_attempts_per_rg": cp.getint("probe", "max_attempts_per_rg", fallback=15),
-        
+        # Text search processing options
+        "artist_textsearch_lowercase": parse_bool(cp.get("probe", "artist_textsearch_lowercase", fallback="false")),
+        "artist_textsearch_remove_symbols": parse_bool(cp.get("probe", "artist_textsearch_remove_symbols", fallback="false")),
         # Circuit breaker settings
         "circuit_breaker_threshold": cp.getint("probe", "circuit_breaker_threshold", fallback=50),
         "backoff_factor": cp.getfloat("probe", "backoff_factor", fallback=0.5),
