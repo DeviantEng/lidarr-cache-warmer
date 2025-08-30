@@ -10,13 +10,14 @@ import requests
 from config import load_config, validate_config
 from storage import create_storage_backend, iso_now
 from process_manual_entries import process_manual_entries
+from bcolors import bcolors
 
 
 def get_lidarr_artists(base_url: str, api_key: str, verify_ssl: bool = True, timeout: int = 60) -> List[Dict]:
     """Fetch artists from Lidarr and return a list of dicts with {id, name, mbid}."""
     session = requests.Session()
     headers = {"X-Api-Key": api_key}
-    
+
     # Configure SSL verification
     session.verify = verify_ssl
     if not verify_ssl:
@@ -25,7 +26,7 @@ def get_lidarr_artists(base_url: str, api_key: str, verify_ssl: bool = True, tim
 
     candidates = [
         "/api/v1/artist",
-        "/api/artist", 
+        "/api/artist",
         "/api/v3/artist",
     ]
 
@@ -59,7 +60,7 @@ def get_lidarr_release_groups(base_url: str, api_key: str, verify_ssl: bool = Tr
     """Fetch release groups from Lidarr and return a list of dicts with album info."""
     session = requests.Session()
     headers = {"X-Api-Key": api_key}
-    
+
     # Configure SSL verification
     session.verify = verify_ssl
     if not verify_ssl:
@@ -68,7 +69,7 @@ def get_lidarr_release_groups(base_url: str, api_key: str, verify_ssl: bool = Tr
 
     candidates = [
         "/api/v1/album",
-        "/api/album", 
+        "/api/album",
         "/api/v3/album",
     ]
 
@@ -87,7 +88,7 @@ def get_lidarr_release_groups(base_url: str, api_key: str, verify_ssl: bool = Tr
                 album_title = album.get("title") or "Unknown Album"
                 artist_mbid = album.get("artist", {}).get("foreignArtistId") if album.get("artist") else None
                 artist_name = album.get("artist", {}).get("artistName") if album.get("artist") else "Unknown Artist"
-                
+
                 if rg_mbid and artist_mbid:
                     release_groups.append({
                         "rg_mbid": rg_mbid,
@@ -111,13 +112,13 @@ def trigger_lidarr_refresh(base_url: str, api_key: str, artist_id: Optional[int]
         return
     session = requests.Session()
     headers = {"X-Api-Key": api_key}
-    
+
     # Configure SSL verification
     session.verify = verify_ssl
     if not verify_ssl:
         import urllib3
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        
+
     payloads = [
         {"name": "RefreshArtist", "artistIds": [artist_id]},
         {"name": "RefreshArtist", "artistId": artist_id},
@@ -140,17 +141,17 @@ def check_api_health(target_base_url: str, timeout: int = 10) -> dict:
         "status_code": None,
         "error": None
     }
-    
+
     try:
         start_time = time.time()
         response = requests.get(target_base_url, timeout=timeout)
         health_info["response_time_ms"] = (time.time() - start_time) * 1000
         health_info["status_code"] = response.status_code
         health_info["available"] = response.status_code < 500
-        
+
     except Exception as e:
         health_info["error"] = str(e)
-    
+
     return health_info
 
 
@@ -178,22 +179,22 @@ def main():
     # Check if this is a first run (no existing storage)
     storage = create_storage_backend(cfg)
     is_first_run = not storage.exists()
-    
+
     if is_first_run:
         print("🔍 First run detected - no existing storage found")
         print("   Enabling force modes for initial cache discovery (1 attempt per entity)")
         cfg["force_artists"] = True
         cfg["max_attempts_per_artist"] = 1
-        
+
         # Also enable text search discovery on first run if configured
         if cfg.get("process_artist_textsearch", True):
             cfg["force_text_search"] = True
             cfg["max_attempts_per_artist_textsearch"] = 1
             print("   Text search discovery enabled (1 attempt per artist)")
-        
+
         # Also enable release group discovery on first run if configured
         if cfg.get("process_release_groups", False):
-            cfg["force_rg"] = True  
+            cfg["force_rg"] = True
             cfg["max_attempts_per_rg"] = 1
             print("   Release group discovery enabled (1 attempt per release group)")
 
@@ -202,7 +203,7 @@ def main():
         cfg["force_artists"] = True
         cfg["max_attempts_per_artist"] = 1
         print("Force artists mode enabled: max_attempts_per_artist set to 1 for quick refresh.")
-    
+
     if args.force_rg:
         cfg["force_rg"] = True
         cfg["max_attempts_per_rg"] = 1
@@ -216,7 +217,7 @@ def main():
     elif cfg.get("force_artists", False):
         cfg["max_attempts_per_artist"] = 1
         print("Force artists mode enabled from config: max_attempts_per_artist set to 1 for quick refresh.")
-        
+
     if cfg.get("force_rg", False) and not args.force_rg:
         cfg["max_attempts_per_rg"] = 1
         print("Force release groups mode enabled from config: max_attempts_per_rg set to 1 for quick refresh.")
@@ -233,11 +234,11 @@ def main():
     if not cfg.get("verify_ssl", True):
         print("⚠️  SSL certificate verification is DISABLED")
         print("   This should only be used in trusted private networks")
-    
+
     # Show timeout configuration
     timeout_value = cfg.get("lidarr_timeout", 60)
     print(f"Lidarr API timeout: {timeout_value} seconds")
-    
+
     # Pre-flight API health check
     print("Performing API health check...")
     api_health = check_api_health(cfg["target_base_url"])
@@ -253,14 +254,14 @@ def main():
         print("Fetching artists from Lidarr...")
         artists = get_lidarr_artists(cfg["lidarr_url"], cfg["api_key"], cfg.get("verify_ssl", True), cfg["lidarr_timeout"])
         print(f"✅ Found {len(artists)} artists in Lidarr")
-        
+
         if cfg["process_release_groups"]:
             print("Fetching release groups from Lidarr...")
             release_groups = get_lidarr_release_groups(cfg["lidarr_url"], cfg["api_key"], cfg.get("verify_ssl", True), cfg["lidarr_timeout"])
             print(f"✅ Found {len(release_groups)} release groups in Lidarr")
         else:
             release_groups = []
-            
+
     except Exception as e:
         print(f"ERROR fetching data from Lidarr: {e}", file=sys.stderr)
         sys.exit(2)
@@ -295,7 +296,7 @@ def main():
             # Update name if changed
             if name and artists_ledger[mbid].get("artist_name") != name:
                 artists_ledger[mbid]["artist_name"] = name
-            
+
             # Add text search fields if missing (for existing records)
             if "text_search_attempted" not in artists_ledger[mbid]:
                 artists_ledger[mbid]["text_search_attempted"] = False
@@ -334,7 +335,7 @@ def main():
     print(f"Updated artists ledger: {len(artists)} total ({artists_new_count} new)")
     if cfg["process_release_groups"]:
         print(f"Updated release groups ledger: {len(rg_ledger)} total ({rg_new_count} new)")
-    
+
     # Show manual entries summary if processed
     if manual_stats["enabled"]:
         if manual_stats["errors"] > 0:
@@ -344,39 +345,39 @@ def main():
 
     if args.dry_run:
         print("\n🧪 DRY RUN MODE - No API calls will be made")
-        
+
         # Show what artists would be processed
-        artists_to_check = [mbid for mbid, row in artists_ledger.items() 
+        artists_to_check = [mbid for mbid, row in artists_ledger.items()
                            if cfg["force_artists"] or row.get("status", "").lower() not in ("success",)]
         print(f"Would process {len(artists_to_check)} artists for MBID warming")
-        
+
         # Show text search candidates
         if cfg["process_artist_textsearch"]:
             text_search_to_check = [mbid for mbid, row in artists_ledger.items()
                                    if row.get("artist_name", "").strip() and
                                       (cfg["force_text_search"] or not row.get("text_search_success", False))]
             print(f"Would process {len(text_search_to_check)} artists for text search warming")
-        
+
         # Show manual entries in dry run
         if manual_stats["enabled"] and manual_stats["file_found"]:
             print(f"Manual entries loaded: {manual_stats['artists_new'] + manual_stats['artists_updated']} artists, {manual_stats['release_groups_new'] + manual_stats['release_groups_updated']} release groups")
-        
+
         if cfg["process_release_groups"]:
             rgs_to_check = [rg_mbid for rg_mbid, row in rg_ledger.items()
-                           if row.get("artist_cache_status", "").lower() == "success" and 
+                           if row.get("artist_cache_status", "").lower() == "success" and
                               (cfg["force_rg"] or row.get("status", "").lower() not in ("success",))]
             print(f"Would process {len(rgs_to_check)} release groups")
         return
 
     # Phase 1: Process Artists (MBID Cache Warming)
-    print(f"\n=== Phase 1: Artist MBID Cache Warming ===")
-    
+    print(f"\n{bcolors.BYELLOW + '=== Phase 1: Artist MBID Cache Warming ===' + bcolors.ENDC}")
+
     # Import and run artist processing
     try:
         from process_artists import process_artists
-        artists_to_check = [mbid for mbid, row in artists_ledger.items() 
+        artists_to_check = [mbid for mbid, row in artists_ledger.items()
                            if cfg["force_artists"] or row.get("status", "").lower() not in ("success",)]
-        
+
         if len(artists_to_check) > 0:
             print(f"Will process {len(artists_to_check)} artists for MBID cache warming")
             artist_results = process_artists(artists_to_check, artists_ledger, cfg, storage)
@@ -384,7 +385,7 @@ def main():
         else:
             print("No artists to process for MBID warming - all already successful")
             artist_results = {"transitioned": 0, "new_successes": 0, "new_failures": 0}
-            
+
     except ImportError:
         print("ERROR: process_artists.py not found", file=sys.stderr)
         sys.exit(2)
@@ -394,19 +395,19 @@ def main():
 
     # Phase 2: Process Text Search Cache Warming (if enabled)
     if cfg["process_artist_textsearch"]:
-        print(f"\n=== Phase 2: Artist Text Search Cache Warming ===")
-        
+        print(f"\n{bcolors.BYELLOW + '=== Phase 2: Artist Text Search Cache Warming ===' + bcolors.ENDC}")
+
         # Re-read artists ledger to get updated statuses from Phase 1
         artists_ledger = storage.read_artists_ledger()
-        
+
         try:
             from process_artist_textsearch import process_text_search
-            
+
             # Only do text search for artists that have names and meet criteria
             text_search_to_check = [mbid for mbid, row in artists_ledger.items()
                                    if row.get("artist_name", "").strip() and
                                       (cfg["force_text_search"] or not row.get("text_search_success", False))]
-            
+
             if len(text_search_to_check) > 0:
                 print(f"Will process {len(text_search_to_check)} artists for text search cache warming")
                 text_search_results = process_text_search(text_search_to_check, artists_ledger, cfg, storage)
@@ -414,7 +415,7 @@ def main():
             else:
                 print("No artists to process for text search warming")
                 text_search_results = {"new_successes": 0, "new_failures": 0}
-                
+
         except ImportError:
             print("ERROR: process_artist_textsearch.py not found", file=sys.stderr)
             sys.exit(2)
@@ -427,11 +428,11 @@ def main():
 
     # Phase 3: Process Release Groups (if enabled)
     if cfg["process_release_groups"]:
-        print(f"\n=== Phase 3: Release Group Cache Warming ===")
-        
+        print(f"\n{bcolors.BYELLOW + '=== Phase 3: Release Group Cache Warming ===' + bcolors.ENDC}")
+
         # Re-read artists ledger to get updated statuses, then update RG artist statuses
         artists_ledger = storage.read_artists_ledger()
-        
+
         # Use efficient SQLite update if available, otherwise update in memory
         if hasattr(storage, 'update_release_groups_artist_status'):
             storage.update_release_groups_artist_status(artists_ledger)
@@ -442,15 +443,15 @@ def main():
                 if artist_mbid in artists_ledger:
                     rg_data["artist_cache_status"] = artists_ledger[artist_mbid].get("status", "")
             storage.write_release_groups_ledger(rg_ledger)
-        
+
         try:
             from process_releasegroups import process_release_groups
-            
+
             # Filter RGs: only process those with successful artist cache AND pending RG status
             rgs_to_check = [rg_mbid for rg_mbid, row in rg_ledger.items()
-                           if row.get("artist_cache_status", "").lower() == "success" and 
+                           if row.get("artist_cache_status", "").lower() == "success" and
                               (cfg["force_rg"] or row.get("status", "").lower() not in ("success",))]
-            
+
             if len(rgs_to_check) > 0:
                 print(f"Will process {len(rgs_to_check)} release groups (from successfully cached artists)")
                 rg_results = process_release_groups(rgs_to_check, rg_ledger, cfg, storage)
@@ -458,7 +459,7 @@ def main():
             else:
                 print("No release groups to process")
                 rg_results = {"transitioned": 0, "new_successes": 0, "new_failures": 0}
-                
+
         except ImportError:
             print("ERROR: process_releasegroups.py not found", file=sys.stderr)
             sys.exit(2)
@@ -470,36 +471,36 @@ def main():
         rg_results = {"transitioned": 0, "new_successes": 0, "new_failures": 0}
 
     # Final summary
-    print(f"\n=== Final Summary ===")
-    print(f"Artist MBID Warming: {artist_results}")
+    print(f"\n{bcolors.BYELLOW + '=== Final Summary ===' + bcolors.ENDC}")
+    print(f"Artist MBID Warming: {bcolors.BWHITE}{artist_results}{bcolors.ENDC}")
     if cfg["process_artist_textsearch"]:
-        print(f"Text Search Warming: {text_search_results}")
+        print(f"Text Search Warming: {bcolors.BWHITE}{text_search_results}{bcolors.ENDC}")
     if cfg["process_release_groups"]:
-        print(f"Release Groups: {rg_results}")
-    
+        print(f"Release Groups: {bcolors.BWHITE}{rg_results}{bcolors.ENDC}")
+
     # Write simple results log
     try:
         # Use config directory + data subdirectory for results log
         config_dir = os.path.dirname(os.path.abspath(args.config))
         results_dir = os.path.join(config_dir, "data") if config_dir else "./data"
         os.makedirs(results_dir, exist_ok=True)
-        
+
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         log_path = os.path.join(results_dir, f"results_{ts}.log")
-        
+
         # Calculate final stats
         total_artist_successes = sum(1 for r in artists_ledger.values() if r.get("status") == "success")
         total_artist_timeouts = sum(1 for r in artists_ledger.values() if r.get("status") == "timeout")
         total_text_search_attempted = sum(1 for r in artists_ledger.values() if r.get("text_search_attempted", False))
         total_text_search_successes = sum(1 for r in artists_ledger.values() if r.get("text_search_success", False))
-        
+
         if cfg["process_release_groups"]:
             total_rg_successes = sum(1 for r in rg_ledger.values() if r.get("status") == "success")
             total_rg_timeouts = sum(1 for r in rg_ledger.values() if r.get("status") == "timeout")
         else:
             total_rg_successes = 0
             total_rg_timeouts = 0
-        
+
         with open(log_path, "w", encoding="utf-8") as lf:
             lf.write(f"finished_at_utc={iso_now()}\n")
             lf.write(f"artists_success={total_artist_successes}\n")
@@ -521,7 +522,7 @@ def main():
             lf.write(f"lidarr_refreshes_triggered={artist_results.get('transitioned', 0)}\n")
             lf.write(f"verify_ssl={'true' if cfg.get('verify_ssl', True) else 'false'}\n")
             lf.write(f"lidarr_timeout={cfg.get('lidarr_timeout', 60)}\n")
-            
+
         print(f"Results log written to: {log_path}")
     except Exception as e:
         print(f"WARNING: Failed to write results log: {e}", file=sys.stderr)
