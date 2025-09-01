@@ -10,6 +10,7 @@ import requests
 from config import load_config, validate_config
 from storage import create_storage_backend, iso_now
 from process_manual_entries import process_manual_entries
+from colors import Colors
 
 
 def get_lidarr_artists(base_url: str, api_key: str, verify_ssl: bool = True, timeout: int = 60) -> List[Dict]:
@@ -222,6 +223,29 @@ def trigger_lidarr_refresh(base_url: str, api_key: str, artist_id: Optional[int]
                 return
             except Exception:
                 continue
+
+
+def is_stale(last_checked: str, recheck_hours: int) -> bool:
+    """Check if a cache entry is stale based on last_checked timestamp and recheck hours"""
+    if recheck_hours <= 0:
+        return False  # Recheck disabled
+    
+    if not last_checked:
+        return True  # Never checked = stale
+    
+    try:
+        # Parse ISO timestamp (handles both with/without timezone)
+        if last_checked.endswith('Z'):
+            last_checked = last_checked[:-1] + '+00:00'
+        elif '+' not in last_checked and 'T' in last_checked:
+            last_checked += '+00:00'
+        
+        last_time = datetime.fromisoformat(last_checked)
+        now = datetime.now(timezone.utc)
+        hours_since = (now - last_time).total_seconds() / 3600
+        return hours_since >= recheck_hours
+    except Exception:
+        return True  # Invalid timestamp = stale
 
 
 def check_api_health(target_base_url: str, timeout: int = 10) -> dict:
@@ -453,8 +477,26 @@ def main():
         
         # Show what artists would be processed
         artists_to_check = [mbid for mbid, row in artists_ledger.items() 
-                           if cfg["force_artists"] or row.get("status", "").lower() not in ("success",)]
+                           if (cfg["force_artists"] or 
+                               row.get("status", "").lower() not in ("success",) or
+                               is_stale(row.get("last_checked", ""), cfg["cache_recheck_hours"]))]
+        
+        # Calculate breakdown for dry run
+        force_count = sum(1 for mbid in artists_to_check if cfg["force_artists"])
+        pending_count = sum(1 for mbid in artists_to_check 
+                           if mbid in artists_ledger and artists_ledger[mbid].get("status", "").lower() not in ("success",))
+        stale_count = sum(1 for mbid in artists_to_check 
+                         if mbid in artists_ledger and 
+                            artists_ledger[mbid].get("status", "").lower() == "success" and
+                            is_stale(artists_ledger[mbid].get("last_checked", ""), cfg["cache_recheck_hours"]))
+        
         print(f"Would process {len(artists_to_check)} artists for MBID warming")
+        if force_count > 0:
+            print(f"   - {force_count} forced re-checks")
+        if pending_count > 0:
+            print(f"   - {pending_count} pending/failed artists")
+        if stale_count > 0:
+            print(f"   - {stale_count} stale entries (older than {cfg['cache_recheck_hours']} hours)")
         
         # Show text search candidates
         if cfg["process_artist_textsearch"]:
@@ -475,20 +517,38 @@ def main():
         return
 
     # Phase 1: Process Artists (MBID Cache Warming)
-    print(f"\n=== Phase 1: Artist MBID Cache Warming ===")
+    print(f"\n{Colors.bold('=== Phase 1: Artist MBID Cache Warming ===', cfg.get('colored_output', True))}")
     
     # Import and run artist processing
     try:
         from process_artists import process_artists
         artists_to_check = [mbid for mbid, row in artists_ledger.items() 
-                           if cfg["force_artists"] or row.get("status", "").lower() not in ("success",)]
+                           if (cfg["force_artists"] or 
+                               row.get("status", "").lower() not in ("success",) or
+                               is_stale(row.get("last_checked", ""), cfg["cache_recheck_hours"]))]
         
         if len(artists_to_check) > 0:
+            # Show breakdown of why artists are being checked
+            force_count = sum(1 for mbid in artists_to_check if cfg["force_artists"])
+            pending_count = sum(1 for mbid in artists_to_check 
+                               if mbid in artists_ledger and artists_ledger[mbid].get("status", "").lower() not in ("success",))
+            stale_count = sum(1 for mbid in artists_to_check 
+                             if mbid in artists_ledger and 
+                                artists_ledger[mbid].get("status", "").lower() == "success" and
+                                is_stale(artists_ledger[mbid].get("last_checked", ""), cfg["cache_recheck_hours"]))
+            
             print(f"Will process {len(artists_to_check)} artists for MBID cache warming")
+            if force_count > 0:
+                print(f"   - {force_count} forced re-checks")
+            if pending_count > 0:
+                print(f"   - {pending_count} pending/failed artists")
+            if stale_count > 0:
+                print(f"   - {stale_count} stale entries (older than {cfg['cache_recheck_hours']} hours)")
+            
             artist_results = process_artists(artists_to_check, artists_ledger, cfg, storage)
             print(f"Artist MBID warming complete: {artist_results}")
         else:
-            print("No artists to process for MBID warming - all already successful")
+            print("No artists to process for MBID warming - all already successful and fresh")
             artist_results = {"transitioned": 0, "new_successes": 0, "new_failures": 0}
             
     except ImportError:
@@ -511,10 +571,28 @@ def main():
             # Only do text search for artists that have names and meet criteria
             text_search_to_check = [mbid for mbid, row in artists_ledger.items()
                                    if row.get("artist_name", "").strip() and
-                                      (cfg["force_text_search"] or not row.get("text_search_success", False))]
+                                      (cfg["force_text_search"] or 
+                                       not row.get("text_search_success", False) or
+                                       is_stale(row.get("text_search_last_checked", ""), cfg["cache_recheck_hours"]))]
             
             if len(text_search_to_check) > 0:
+                # Show breakdown of text search reasons
+                force_count = sum(1 for mbid in text_search_to_check if cfg["force_text_search"])
+                pending_count = sum(1 for mbid in text_search_to_check 
+                                   if mbid in artists_ledger and not artists_ledger[mbid].get("text_search_success", False))
+                stale_count = sum(1 for mbid in text_search_to_check 
+                                 if mbid in artists_ledger and 
+                                    artists_ledger[mbid].get("text_search_success", False) and
+                                    is_stale(artists_ledger[mbid].get("text_search_last_checked", ""), cfg["cache_recheck_hours"]))
+                
                 print(f"Will process {len(text_search_to_check)} artists for text search cache warming")
+                if force_count > 0:
+                    print(f"   - {force_count} forced re-checks")
+                if pending_count > 0:
+                    print(f"   - {pending_count} pending/failed text searches")
+                if stale_count > 0:
+                    print(f"   - {stale_count} stale text searches (older than {cfg['cache_recheck_hours']} hours)")
+                
                 text_search_results = process_text_search(text_search_to_check, artists_ledger, cfg, storage)
                 print(f"Text search warming complete: {text_search_results}")
             else:
@@ -555,10 +633,28 @@ def main():
             # Filter RGs: only process those with successful artist cache AND pending RG status
             rgs_to_check = [rg_mbid for rg_mbid, row in rg_ledger.items()
                            if row.get("artist_cache_status", "").lower() == "success" and 
-                              (cfg["force_rg"] or row.get("status", "").lower() not in ("success",))]
+                              (cfg["force_rg"] or 
+                               row.get("status", "").lower() not in ("success",) or
+                               is_stale(row.get("last_checked", ""), cfg["cache_recheck_hours"]))]
             
             if len(rgs_to_check) > 0:
+                # Show breakdown of release group reasons
+                force_count = sum(1 for rg_mbid in rgs_to_check if cfg["force_rg"])
+                pending_count = sum(1 for rg_mbid in rgs_to_check 
+                                   if rg_mbid in rg_ledger and rg_ledger[rg_mbid].get("status", "").lower() not in ("success",))
+                stale_count = sum(1 for rg_mbid in rgs_to_check 
+                                 if rg_mbid in rg_ledger and 
+                                    rg_ledger[rg_mbid].get("status", "").lower() == "success" and
+                                    is_stale(rg_ledger[rg_mbid].get("last_checked", ""), cfg["cache_recheck_hours"]))
+                
                 print(f"Will process {len(rgs_to_check)} release groups (from successfully cached artists)")
+                if force_count > 0:
+                    print(f"   - {force_count} forced re-checks")
+                if pending_count > 0:
+                    print(f"   - {pending_count} pending/failed release groups")
+                if stale_count > 0:
+                    print(f"   - {stale_count} stale entries (older than {cfg['cache_recheck_hours']} hours)")
+                
                 rg_results = process_release_groups(rgs_to_check, rg_ledger, cfg, storage)
                 print(f"Release groups phase complete: {rg_results}")
             else:
@@ -587,7 +683,7 @@ def main():
     try:
         # Use config directory + data subdirectory for results log
         config_dir = os.path.dirname(os.path.abspath(args.config))
-        results_dir = os.path.join(config_dir, "data") if config_dir else "./data"
+        results_dir = config_dir if config_dir else "."
         os.makedirs(results_dir, exist_ok=True)
         
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

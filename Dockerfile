@@ -16,6 +16,7 @@ COPY main.py .
 COPY config.py .
 COPY storage.py .
 COPY stats.py .
+COPY colors.py .
 COPY process_artists.py .
 COPY process_artist_textsearch.py .
 COPY process_releasegroups.py .

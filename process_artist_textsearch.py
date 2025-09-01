@@ -11,6 +11,7 @@ from typing import Dict, List, Tuple
 import aiohttp
 
 from storage import iso_now
+from colors import Colors
 
 
 def process_artist_name_for_text_search(
@@ -277,6 +278,9 @@ async def check_text_searches_concurrent_with_timing(
     new_attempts = 0
     timeout_obj = aiohttp.ClientTimeout(total=cfg["timeout_seconds"])
     
+    # Get color setting from config
+    colored_output = cfg.get("colored_output", True)
+    
     # Track progress stats for this batch
     batch_successes = 0
     batch_attempts = 0
@@ -285,7 +289,8 @@ async def check_text_searches_concurrent_with_timing(
         for i, mbid in enumerate(to_check):
             # Check circuit breaker
             if not await rate_limiter.acquire():
-                print(f"🚫 Circuit breaker open, skipping remaining {len(to_check) - i} text searches")
+                circuit_text = Colors.error(f"🚫 Circuit breaker open, skipping remaining {len(to_check) - i} text searches", colored_output)
+                print(circuit_text)
                 break
             
             name = ledger[mbid].get("artist_name", "Unknown")
@@ -328,16 +333,18 @@ async def check_text_searches_concurrent_with_timing(
                     "text_search_last_checked": iso_now()
                 })
                 
-                # Count results
+                # Count results and display with colors
                 new_attempts += 1
                 batch_attempts += 1
                 
                 if status == "success":
                     new_successes += 1
                     batch_successes += 1
-                    print(f" SUCCESS (code={last_code}, attempts={attempts_used})")
+                    success_text = Colors.success("SUCCESS", colored_output)
+                    print(f" {success_text} (code={last_code}, attempts={attempts_used})")
                 else:
-                    print(f" TIMEOUT (code={last_code}, attempts={attempts_used})")
+                    timeout_text = Colors.error("TIMEOUT", colored_output)
+                    print(f" {timeout_text} (code={last_code}, attempts={attempts_used})")
                 
             except Exception as e:
                 response_time = 1.0  # Estimate for failed requests
@@ -351,7 +358,8 @@ async def check_text_searches_concurrent_with_timing(
                 
                 new_attempts += 1
                 batch_attempts += 1
-                print(f" FAILED (code=EXC:{type(e).__name__}, attempts={cfg['max_attempts_per_artist_textsearch']})")
+                timeout_text = Colors.error("TIMEOUT", colored_output)
+                print(f" {timeout_text} (code=EXC:{type(e).__name__}, attempts={cfg['max_attempts_per_artist_textsearch']})")
             
             # Batch writing
             if global_position % cfg.get("batch_write_frequency", 5) == 0:
@@ -370,9 +378,21 @@ async def check_text_searches_concurrent_with_timing(
                 
                 stats = rate_limiter.get_stats()
                 
+                # Color the batch success rate
+                if batch_attempts > 0:
+                    success_rate_text = f"{batch_successes}/{batch_attempts}"
+                    if batch_successes == batch_attempts:
+                        success_rate_text = Colors.success(success_rate_text, colored_output)
+                    elif batch_successes == 0:
+                        success_rate_text = Colors.error(success_rate_text, colored_output)
+                    else:
+                        success_rate_text = Colors.warning(success_rate_text, colored_output)
+                else:
+                    success_rate_text = "0/0"
+                
                 print(f"Progress: {global_position}/{total_to_process} ({(global_position/total_to_process*100):.1f}%) - "
                       f"Rate: {searches_per_sec:.1f} searches/sec - ETC: {etc_str} - "
-                      f"API: {stats.get('current_rate', 'N/A')} - Batch: {batch_successes}/{batch_attempts} success")
+                      f"API: {stats.get('current_rate', 'N/A')} - Batch: {success_rate_text} success")
     
     return new_successes, new_attempts
 
@@ -389,6 +409,9 @@ def process_text_searches_in_batches(
     total_new_successes = 0
     total_new_attempts = 0
     
+    # Get color setting from config
+    colored_output = cfg.get("colored_output", True)
+    
     # Track timing across all batches
     overall_start_time = time.time()
     total_processed = 0
@@ -397,7 +420,8 @@ def process_text_searches_in_batches(
         batch_num = batch_idx // batch_size + 1
         batch = to_check[batch_idx:batch_idx + batch_size]
         
-        print(f"=== Text Search Batch {batch_num}/{total_batches} ({len(batch)} artists) ===")
+        batch_header = Colors.info(f"=== Text Search Batch {batch_num}/{total_batches} ({len(batch)} artists) ===", colored_output)
+        print(batch_header)
         
         batch_successes, batch_attempts = asyncio.run(
             check_text_searches_concurrent_with_timing(batch, ledger, cfg, storage, overall_start_time, total_processed)
@@ -409,7 +433,8 @@ def process_text_searches_in_batches(
         
         # Write after each batch
         storage.write_artists_ledger(ledger)
-        print(f"Text search batch {batch_num} complete. Ledger updated.")
+        complete_text = Colors.success(f"Text search batch {batch_num} complete. Ledger updated.", colored_output)
+        print(complete_text)
         
         # Optional: brief pause between batches
         if batch_num < total_batches and cfg.get("batch_pause_seconds", 0) > 0:
@@ -424,7 +449,11 @@ def process_text_search(to_check: List[str], ledger: Dict[str, Dict], cfg: dict,
     if len(to_check) == 0:
         return {"new_successes": 0, "new_failures": 0}
     
-    print(f"Processing {len(to_check)} artists for text search cache warming...")
+    # Get color setting from config
+    colored_output = cfg.get("colored_output", True)
+    
+    processing_header = Colors.bold(f"Processing {len(to_check)} artists for text search cache warming...", colored_output)
+    print(processing_header)
     print(f"Settings: {cfg['max_attempts_per_artist_textsearch']} attempts, {cfg['delay_between_attempts']}s delay, "
           f"{cfg['max_concurrent_requests']} concurrent, {cfg['rate_limit_per_second']} req/sec")
     
@@ -435,9 +464,11 @@ def process_text_search(to_check: List[str], ledger: Dict[str, Dict], cfg: dict,
             processing_options.append("lowercase conversion")
         if cfg.get("artist_textsearch_remove_symbols", False):
             processing_options.append("symbol/diacritic removal")
-        print(f"Text processing: {', '.join(processing_options)}")
+        processing_text = Colors.cyan(f"Text processing: {', '.join(processing_options)}", colored_output)
+        print(processing_text)
     else:
-        print("Text processing: disabled (using original artist names)")
+        disabled_text = Colors.dim("Text processing: disabled (using original artist names)", colored_output)
+        print(disabled_text)
     
     try:
         if cfg.get("batch_size", 25) < len(to_check):
@@ -460,10 +491,12 @@ def process_text_search(to_check: List[str], ledger: Dict[str, Dict], cfg: dict,
         }
         
     except KeyboardInterrupt:
-        print("\n⚠️  Interrupted by user. Saving progress...")
+        warning_text = Colors.warning("⚠️  Interrupted by user. Saving progress...", colored_output)
+        print(f"\n{warning_text}")
         storage.write_artists_ledger(ledger)
         return {"new_successes": 0, "new_failures": 0}
     except Exception as e:
-        print(f"ERROR in text search processing: {e}")
+        error_text = Colors.error(f"ERROR in text search processing: {e}", colored_output)
+        print(error_text)
         storage.write_artists_ledger(ledger)
         raise

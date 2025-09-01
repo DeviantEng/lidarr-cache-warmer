@@ -9,6 +9,7 @@ from typing import Dict, List, Tuple
 import aiohttp
 
 from storage import iso_now
+from colors import Colors
 
 
 class SafeRateLimiter:
@@ -212,6 +213,9 @@ async def check_release_groups_concurrent_with_timing(
     new_failures = 0
     timeout_obj = aiohttp.ClientTimeout(total=cfg["timeout_seconds"])
     
+    # Get color setting from config
+    colored_output = cfg.get("colored_output", True)
+    
     # Track progress stats for this batch
     batch_successes = 0
     batch_timeouts = 0
@@ -220,7 +224,8 @@ async def check_release_groups_concurrent_with_timing(
         for i, rg_mbid in enumerate(to_check):
             # Check circuit breaker
             if not await rate_limiter.acquire():
-                print(f"🚫 Circuit breaker open, skipping remaining {len(to_check) - i} release groups")
+                circuit_text = Colors.error(f"🚫 Circuit breaker open, skipping remaining {len(to_check) - i} release groups", colored_output)
+                print(circuit_text)
                 break
             
             rg_data = ledger[rg_mbid]
@@ -254,15 +259,17 @@ async def check_release_groups_concurrent_with_timing(
                     "last_checked": iso_now()
                 })
                 
-                # Count results
+                # Count results and display with colors
                 if status == "success":
                     new_successes += 1
                     batch_successes += 1
-                    print(f" SUCCESS (code={last_code}, attempts={attempts_used})")
+                    success_text = Colors.success("SUCCESS", colored_output)
+                    print(f" {success_text} (code={last_code}, attempts={attempts_used})")
                 else:
                     new_failures += 1
                     batch_timeouts += 1
-                    print(f" TIMEOUT (code={last_code}, attempts={attempts_used})")
+                    timeout_text = Colors.error("TIMEOUT", colored_output)
+                    print(f" {timeout_text} (code={last_code}, attempts={attempts_used})")
                 
                 # Note: Release groups don't typically trigger Lidarr refreshes
                 # But if needed, we could implement that here similar to artists
@@ -280,7 +287,8 @@ async def check_release_groups_concurrent_with_timing(
                 
                 new_failures += 1
                 batch_timeouts += 1
-                print(f" TIMEOUT (code=EXC:{type(e).__name__}, attempts={cfg['max_attempts_per_rg']})")
+                timeout_text = Colors.error("TIMEOUT", colored_output)
+                print(f" {timeout_text} (code=EXC:{type(e).__name__}, attempts={cfg['max_attempts_per_rg']})")
             
             # Batch writing
             if global_position % cfg.get("batch_write_frequency", 5) == 0:
@@ -299,12 +307,22 @@ async def check_release_groups_concurrent_with_timing(
                 
                 stats = rate_limiter.get_stats()
                 
-                # Calculate total processed in current batch so far
+                # Color the batch success rate
                 batch_processed = batch_successes + batch_timeouts
+                if batch_processed > 0:
+                    success_rate_text = f"{batch_successes}/{batch_processed}"
+                    if batch_successes == batch_processed:
+                        success_rate_text = Colors.success(success_rate_text, colored_output)
+                    elif batch_successes == 0:
+                        success_rate_text = Colors.error(success_rate_text, colored_output)
+                    else:
+                        success_rate_text = Colors.warning(success_rate_text, colored_output)
+                else:
+                    success_rate_text = "0/0"
                 
                 print(f"Progress: {global_position}/{total_to_process} ({(global_position/total_to_process*100):.1f}%) - "
                       f"Rate: {rgs_per_sec:.1f} rgs/sec - ETC: {etc_str} - "
-                      f"API: {stats.get('current_rate', 'N/A')} - Batch: {batch_successes}/{batch_processed} success")
+                      f"API: {stats.get('current_rate', 'N/A')} - Batch: {success_rate_text} success")
     
     return transitioned_count, new_successes, new_failures
 
@@ -322,6 +340,9 @@ def process_release_groups_in_batches(
     total_new_successes = 0
     total_new_failures = 0
     
+    # Get color setting from config
+    colored_output = cfg.get("colored_output", True)
+    
     # Track timing across all batches
     overall_start_time = time.time()
     total_processed = 0
@@ -330,7 +351,8 @@ def process_release_groups_in_batches(
         batch_num = batch_idx // batch_size + 1
         batch = to_check[batch_idx:batch_idx + batch_size]
         
-        print(f"=== Release Groups Batch {batch_num}/{total_batches} ({len(batch)} release groups) ===")
+        batch_header = Colors.info(f"=== Release Groups Batch {batch_num}/{total_batches} ({len(batch)} release groups) ===", colored_output)
+        print(batch_header)
         
         batch_transitioned, batch_successes, batch_failures = asyncio.run(
             check_release_groups_concurrent_with_timing(batch, ledger, cfg, storage, overall_start_time, total_processed)
@@ -343,7 +365,8 @@ def process_release_groups_in_batches(
         
         # Write after each batch
         storage.write_release_groups_ledger(ledger)
-        print(f"Release groups batch {batch_num} complete. Ledger updated.")
+        complete_text = Colors.success(f"Release groups batch {batch_num} complete. Ledger updated.", colored_output)
+        print(complete_text)
         
         # Optional: brief pause between batches
         if batch_num < total_batches and cfg.get("batch_pause_seconds", 0) > 0:
@@ -358,7 +381,11 @@ def process_release_groups(to_check: List[str], ledger: Dict[str, Dict], cfg: di
     if len(to_check) == 0:
         return {"transitioned": 0, "new_successes": 0, "new_failures": 0}
     
-    print(f"Processing {len(to_check)} release groups with cache warming...")
+    # Get color setting from config
+    colored_output = cfg.get("colored_output", True)
+    
+    processing_header = Colors.bold(f"Processing {len(to_check)} release groups with cache warming...", colored_output)
+    print(processing_header)
     print(f"Settings: {cfg['max_attempts_per_rg']} attempts, {cfg['delay_between_attempts']}s delay, "
           f"{cfg['max_concurrent_requests']} concurrent, {cfg['rate_limit_per_second']} req/sec")
     
@@ -382,10 +409,12 @@ def process_release_groups(to_check: List[str], ledger: Dict[str, Dict], cfg: di
         }
         
     except KeyboardInterrupt:
-        print("\n⚠️  Interrupted by user. Saving progress...")
+        warning_text = Colors.warning("⚠️  Interrupted by user. Saving progress...", colored_output)
+        print(f"\n{warning_text}")
         storage.write_release_groups_ledger(ledger)
         return {"transitioned": 0, "new_successes": 0, "new_failures": 0}
     except Exception as e:
-        print(f"ERROR in release group processing: {e}")
+        error_text = Colors.error(f"ERROR in release group processing: {e}", colored_output)
+        print(error_text)
         storage.write_release_groups_ledger(ledger)
         raise

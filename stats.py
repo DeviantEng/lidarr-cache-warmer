@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 import argparse
+import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict
 
 from config import load_config, validate_config
@@ -9,8 +10,51 @@ from main import get_lidarr_artists, get_lidarr_release_groups
 from storage import create_storage_backend
 
 
-def analyze_artists_stats(artists_ledger: Dict[str, Dict]) -> Dict[str, any]:
-    """Analyze artist statistics from ledger"""
+def is_stale(last_checked: str, recheck_hours: int) -> bool:
+    """Check if a cache entry is stale based on last_checked timestamp and recheck hours"""
+    if recheck_hours <= 0:
+        return False  # Recheck disabled
+    
+    if not last_checked:
+        return True  # Never checked = stale
+    
+    try:
+        # Parse ISO timestamp (handles both with/without timezone)
+        if last_checked.endswith('Z'):
+            last_checked = last_checked[:-1] + '+00:00'
+        elif '+' not in last_checked and 'T' in last_checked:
+            last_checked += '+00:00'
+        
+        last_time = datetime.fromisoformat(last_checked)
+        now = datetime.now(timezone.utc)
+        hours_since = (now - last_time).total_seconds() / 3600
+        return hours_since >= recheck_hours
+    except Exception:
+        return True  # Invalid timestamp = stale
+
+
+def get_hours_until_stale(last_checked: str, recheck_hours: int) -> float:
+    """Get hours until entry becomes stale. Returns 0 if already stale or never checked."""
+    if recheck_hours <= 0 or not last_checked:
+        return 0
+    
+    try:
+        if last_checked.endswith('Z'):
+            last_checked = last_checked[:-1] + '+00:00'
+        elif '+' not in last_checked and 'T' in last_checked:
+            last_checked += '+00:00'
+        
+        last_time = datetime.fromisoformat(last_checked)
+        now = datetime.now(timezone.utc)
+        hours_since = (now - last_time).total_seconds() / 3600
+        hours_remaining = recheck_hours - hours_since
+        return max(0, hours_remaining)
+    except Exception:
+        return 0
+
+
+def analyze_artists_stats(artists_ledger: Dict[str, Dict], cache_recheck_hours: int) -> Dict[str, any]:
+    """Analyze artist statistics from ledger including staleness information"""
     if not artists_ledger:
         return {
             "total": 0,
@@ -22,7 +66,11 @@ def analyze_artists_stats(artists_ledger: Dict[str, Dict]) -> Dict[str, any]:
             "text_search_success": 0,
             "text_search_success_rate": 0.0,
             "text_search_pending": 0,
-            "artists_with_names": 0
+            "artists_with_names": 0,
+            "stale_mbid_cache": 0,
+            "stale_text_search": 0,
+            "next_recheck_hours": 0,
+            "recheck_enabled": cache_recheck_hours > 0
         }
     
     total = len(artists_ledger)
@@ -40,6 +88,34 @@ def analyze_artists_stats(artists_ledger: Dict[str, Dict]) -> Dict[str, any]:
     artists_with_names = sum(1 for r in artists_ledger.values() if r.get("artist_name", "").strip())
     text_search_pending = artists_with_names - text_search_attempted
     
+    # Staleness statistics (only if recheck is enabled)
+    stale_mbid_cache = 0
+    stale_text_search = 0
+    next_recheck_hours = float('inf')
+    
+    if cache_recheck_hours > 0:
+        for r in artists_ledger.values():
+            # Count stale MBID cache entries (successful but stale)
+            if (r.get("status", "").lower() == "success" and 
+                is_stale(r.get("last_checked", ""), cache_recheck_hours)):
+                stale_mbid_cache += 1
+            
+            # Count stale text search entries (successful but stale)
+            if (r.get("text_search_success", False) and 
+                is_stale(r.get("text_search_last_checked", ""), cache_recheck_hours)):
+                stale_text_search += 1
+            
+            # Find next recheck time
+            for timestamp_field in ["last_checked", "text_search_last_checked"]:
+                timestamp = r.get(timestamp_field, "")
+                if timestamp:
+                    hours_until_stale = get_hours_until_stale(timestamp, cache_recheck_hours)
+                    if 0 < hours_until_stale < next_recheck_hours:
+                        next_recheck_hours = hours_until_stale
+    
+    if next_recheck_hours == float('inf'):
+        next_recheck_hours = 0
+    
     return {
         "total": total,
         "success": success,
@@ -50,12 +126,16 @@ def analyze_artists_stats(artists_ledger: Dict[str, Dict]) -> Dict[str, any]:
         "text_search_success": text_search_success,
         "text_search_success_rate": text_search_success_rate,
         "text_search_pending": text_search_pending,
-        "artists_with_names": artists_with_names
+        "artists_with_names": artists_with_names,
+        "stale_mbid_cache": stale_mbid_cache,
+        "stale_text_search": stale_text_search,
+        "next_recheck_hours": next_recheck_hours,
+        "recheck_enabled": cache_recheck_hours > 0
     }
 
 
-def analyze_release_groups_stats(rg_ledger: Dict[str, Dict]) -> Dict[str, any]:
-    """Analyze release group statistics from ledger"""
+def analyze_release_groups_stats(rg_ledger: Dict[str, Dict], cache_recheck_hours: int) -> Dict[str, any]:
+    """Analyze release group statistics from ledger including staleness information"""
     if not rg_ledger:
         return {
             "total": 0,
@@ -63,7 +143,10 @@ def analyze_release_groups_stats(rg_ledger: Dict[str, Dict]) -> Dict[str, any]:
             "timeout": 0,
             "pending": 0,
             "success_rate": 0.0,
-            "eligible_for_processing": 0
+            "eligible_for_processing": 0,
+            "stale_entries": 0,
+            "next_recheck_hours": 0,
+            "recheck_enabled": cache_recheck_hours > 0
         }
     
     total = len(rg_ledger)
@@ -76,13 +159,37 @@ def analyze_release_groups_stats(rg_ledger: Dict[str, Dict]) -> Dict[str, any]:
     eligible = sum(1 for r in rg_ledger.values() 
                   if r.get("artist_cache_status", "").lower() == "success")
     
+    # Staleness statistics (only if recheck is enabled)
+    stale_entries = 0
+    next_recheck_hours = float('inf')
+    
+    if cache_recheck_hours > 0:
+        for r in rg_ledger.values():
+            # Count stale entries (successful but stale)
+            if (r.get("status", "").lower() == "success" and 
+                is_stale(r.get("last_checked", ""), cache_recheck_hours)):
+                stale_entries += 1
+            
+            # Find next recheck time
+            timestamp = r.get("last_checked", "")
+            if timestamp:
+                hours_until_stale = get_hours_until_stale(timestamp, cache_recheck_hours)
+                if 0 < hours_until_stale < next_recheck_hours:
+                    next_recheck_hours = hours_until_stale
+    
+    if next_recheck_hours == float('inf'):
+        next_recheck_hours = 0
+    
     return {
         "total": total,
         "success": success,
         "timeout": timeout,
         "pending": pending,
         "success_rate": success_rate,
-        "eligible_for_processing": eligible
+        "eligible_for_processing": eligible,
+        "stale_entries": stale_entries,
+        "next_recheck_hours": next_recheck_hours,
+        "recheck_enabled": cache_recheck_hours > 0
     }
 
 
@@ -107,6 +214,7 @@ def format_config_summary(cfg: dict) -> str:
         f"     • process_release_groups: {cfg.get('process_release_groups', False)}",
         f"     • process_artist_textsearch: {cfg.get('process_artist_textsearch', True)}",
         f"     • batch_size: {cfg.get('batch_size', 25)}",
+        f"     • cache_recheck_hours: {cfg.get('cache_recheck_hours', 72)}",
         f"   Text Search Processing:",
         f"     • artist_textsearch_lowercase: {cfg.get('artist_textsearch_lowercase', False)}",
         f"     • artist_textsearch_remove_symbols: {cfg.get('artist_textsearch_remove_symbols', False)}",
@@ -193,7 +301,7 @@ def print_stats_report(cfg: dict):
     print()
     
     # Artist statistics
-    artist_stats = analyze_artists_stats(artists_ledger)
+    artist_stats = analyze_artists_stats(artists_ledger, cfg.get("cache_recheck_hours", 72))
     print("🎤 ARTIST MBID STATISTICS:")
     print(f"   Total artists in Lidarr: {lidarr_artist_count:,}")
     print(f"   Artists in ledger: {artist_stats['total']:,}")
@@ -204,6 +312,16 @@ def print_stats_report(cfg: dict):
     if lidarr_artist_count != artist_stats['total']:
         diff = lidarr_artist_count - artist_stats['total']
         print(f"   📊 Ledger sync: {abs(diff)} artists {'ahead' if diff < 0 else 'behind'} Lidarr")
+    
+    # Show staleness information if recheck is enabled
+    if artist_stats['recheck_enabled'] and artist_stats['stale_mbid_cache'] > 0:
+        print(f"   ⏰ Stale MBID cache: {artist_stats['stale_mbid_cache']:,} (older than {cfg.get('cache_recheck_hours', 72)} hours)")
+        if artist_stats['next_recheck_hours'] > 0:
+            print(f"   🔄 Next recheck in: {artist_stats['next_recheck_hours']:.1f} hours")
+    elif artist_stats['recheck_enabled']:
+        print(f"   ⏰ All MBID cache entries are fresh (< {cfg.get('cache_recheck_hours', 72)} hours)")
+    else:
+        print(f"   ⏰ Cache freshness checking disabled (cache_recheck_hours = 0)")
     
     print()
     
@@ -219,6 +337,12 @@ def print_stats_report(cfg: dict):
             # Calculate text search coverage
             text_coverage = (artist_stats['text_search_attempted'] / artist_stats['artists_with_names'] * 100) if artist_stats['artists_with_names'] > 0 else 0
             print(f"   📊 Text search coverage: {text_coverage:.1f}% of named artists")
+            
+            # Show staleness information for text search if recheck is enabled
+            if artist_stats['recheck_enabled'] and artist_stats['stale_text_search'] > 0:
+                print(f"   ⏰ Stale text searches: {artist_stats['stale_text_search']:,} (older than {cfg.get('cache_recheck_hours', 72)} hours)")
+            elif artist_stats['recheck_enabled']:
+                print(f"   ⏰ All text search cache entries are fresh (< {cfg.get('cache_recheck_hours', 72)} hours)")
         else:
             print(f"   ⏳ Text searches pending: {artist_stats['text_search_pending']:,} (none attempted yet)")
         
@@ -230,7 +354,7 @@ def print_stats_report(cfg: dict):
     
     # Release group statistics (if enabled)
     if cfg.get("process_release_groups", False):
-        rg_stats = analyze_release_groups_stats(rg_ledger)
+        rg_stats = analyze_release_groups_stats(rg_ledger, cfg.get("cache_recheck_hours", 72))
         print("💿 RELEASE GROUP STATISTICS:")
         print(f"   Total release groups in Lidarr: {lidarr_rg_count:,}")
         print(f"   Release groups in ledger: {rg_stats['total']:,}")
@@ -243,6 +367,14 @@ def print_stats_report(cfg: dict):
         if lidarr_rg_count != rg_stats['total']:
             diff = lidarr_rg_count - rg_stats['total']
             print(f"   📊 Ledger sync: {abs(diff)} release groups {'ahead' if diff < 0 else 'behind'} Lidarr")
+        
+        # Show staleness information if recheck is enabled
+        if rg_stats['recheck_enabled'] and rg_stats['stale_entries'] > 0:
+            print(f"   ⏰ Stale cache entries: {rg_stats['stale_entries']:,} (older than {cfg.get('cache_recheck_hours', 72)} hours)")
+            if rg_stats['next_recheck_hours'] > 0:
+                print(f"   🔄 Next recheck in: {rg_stats['next_recheck_hours']:.1f} hours")
+        elif rg_stats['recheck_enabled']:
+            print(f"   ⏰ All cache entries are fresh (< {cfg.get('cache_recheck_hours', 72)} hours)")
         
         print()
         

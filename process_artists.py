@@ -9,6 +9,7 @@ from typing import Dict, List, Tuple, Optional
 import aiohttp
 
 from storage import iso_now
+from colors import Colors
 
 
 def trigger_lidarr_refresh(base_url: str, api_key: str, artist_id: Optional[int], verify_ssl: bool = True) -> None:
@@ -241,6 +242,9 @@ async def check_artists_concurrent_with_timing(
     new_failures = 0
     timeout_obj = aiohttp.ClientTimeout(total=cfg["timeout_seconds"])
     
+    # Get color setting from config
+    colored_output = cfg.get("colored_output", True)
+    
     # Track progress stats for this batch
     batch_successes = 0
     batch_timeouts = 0
@@ -281,15 +285,17 @@ async def check_artists_concurrent_with_timing(
                     "last_checked": iso_now()
                 })
                 
-                # Count results
+                # Count results and display with colors
                 if status == "success":
                     new_successes += 1
                     batch_successes += 1
-                    print(f" SUCCESS (code={last_code}, attempts={attempts_used})")
+                    success_text = Colors.success("SUCCESS", colored_output)
+                    print(f" {success_text} (code={last_code}, attempts={attempts_used})")
                 else:
                     new_failures += 1
                     batch_timeouts += 1
-                    print(f" TIMEOUT (code={last_code}, attempts={attempts_used})")
+                    timeout_text = Colors.error("TIMEOUT", colored_output)
+                    print(f" {timeout_text} (code={last_code}, attempts={attempts_used})")
                 
                 # Trigger Lidarr refresh if configured
                 if (cfg.get("update_lidarr", False) 
@@ -299,7 +305,8 @@ async def check_artists_concurrent_with_timing(
                     # This will need to be passed in or looked up
                     trigger_lidarr_refresh(cfg["lidarr_url"], cfg["api_key"], None, cfg.get("verify_ssl", True))  # TODO: Fix this
                     transitioned_count += 1
-                    print(f"  -> Triggered Lidarr refresh for {name}")
+                    refresh_text = Colors.info("Triggered Lidarr refresh", colored_output)
+                    print(f"  -> {refresh_text} for {name}")
                 
             except Exception as e:
                 response_time = 1.0  # Estimate for failed requests
@@ -314,7 +321,8 @@ async def check_artists_concurrent_with_timing(
                 
                 new_failures += 1
                 batch_timeouts += 1
-                print(f" TIMEOUT (code=EXC:{type(e).__name__}, attempts={cfg['max_attempts_per_artist']})")
+                timeout_text = Colors.error("TIMEOUT", colored_output)
+                print(f" {timeout_text} (code=EXC:{type(e).__name__}, attempts={cfg['max_attempts_per_artist']})")
             
             # Batch writing
             if global_position % cfg.get("batch_write_frequency", 5) == 0:
@@ -340,9 +348,21 @@ async def check_artists_concurrent_with_timing(
                 window_successes = batch_successes
                 window_total = batch_successes + batch_timeouts
                 
+                # Color the batch success rate
+                if window_total > 0:
+                    success_rate_text = f"{window_successes}/{window_total}"
+                    if window_successes == window_total:
+                        success_rate_text = Colors.success(success_rate_text, colored_output)
+                    elif window_successes == 0:
+                        success_rate_text = Colors.error(success_rate_text, colored_output)
+                    else:
+                        success_rate_text = Colors.warning(success_rate_text, colored_output)
+                else:
+                    success_rate_text = "0/0"
+                
                 print(f"Progress: {global_position}/{total_to_process} ({(global_position/total_to_process*100):.1f}%) - "
                       f"Rate: {artists_per_sec:.1f} artists/sec - ETC: {etc_str} - "
-                      f"API: {stats.get('current_rate', 'N/A')} - Batch: {window_successes}/{window_total} success")
+                      f"API: {stats.get('current_rate', 'N/A')} - Batch: {success_rate_text} success")
     
     return transitioned_count, new_successes, new_failures
 
@@ -360,6 +380,9 @@ def process_artists_in_batches(
     total_new_successes = 0
     total_new_failures = 0
     
+    # Get color setting from config
+    colored_output = cfg.get("colored_output", True)
+    
     # Track timing across all batches
     overall_start_time = time.time()
     total_processed = 0
@@ -368,7 +391,8 @@ def process_artists_in_batches(
         batch_num = batch_idx // batch_size + 1
         batch = to_check[batch_idx:batch_idx + batch_size]
         
-        print(f"=== Artists Batch {batch_num}/{total_batches} ({len(batch)} artists) ===")
+        batch_header = Colors.info(f"=== Artists Batch {batch_num}/{total_batches} ({len(batch)} artists) ===", colored_output)
+        print(batch_header)
         
         batch_transitioned, batch_successes, batch_failures = asyncio.run(
             check_artists_concurrent_with_timing(batch, ledger, cfg, storage, overall_start_time, total_processed)
@@ -381,7 +405,8 @@ def process_artists_in_batches(
         
         # Write after each batch
         storage.write_artists_ledger(ledger)
-        print(f"Artists batch {batch_num} complete. Ledger updated.")
+        complete_text = Colors.success(f"Artists batch {batch_num} complete. Ledger updated.", colored_output)
+        print(complete_text)
         
         # Optional: brief pause between batches
         if batch_num < total_batches and cfg.get("batch_pause_seconds", 0) > 0:
@@ -396,7 +421,11 @@ def process_artists(to_check: List[str], ledger: Dict[str, Dict], cfg: dict, sto
     if len(to_check) == 0:
         return {"transitioned": 0, "new_successes": 0, "new_failures": 0}
     
-    print(f"Processing {len(to_check)} artists with cache warming...")
+    # Get color setting from config
+    colored_output = cfg.get("colored_output", True)
+    
+    processing_header = Colors.bold(f"Processing {len(to_check)} artists with cache warming...", colored_output)
+    print(processing_header)
     print(f"Settings: {cfg['max_attempts_per_artist']} attempts, {cfg['delay_between_attempts']}s delay, "
           f"{cfg['max_concurrent_requests']} concurrent, {cfg['rate_limit_per_second']} req/sec")
     
@@ -420,10 +449,12 @@ def process_artists(to_check: List[str], ledger: Dict[str, Dict], cfg: dict, sto
         }
         
     except KeyboardInterrupt:
-        print("\n⚠️  Interrupted by user. Saving progress...")
+        warning_text = Colors.warning("⚠️  Interrupted by user. Saving progress...", colored_output)
+        print(f"\n{warning_text}")
         storage.write_artists_ledger(ledger)
         return {"transitioned": 0, "new_successes": 0, "new_failures": 0}
     except Exception as e:
-        print(f"ERROR in artist processing: {e}")
+        error_text = Colors.error(f"ERROR in artist processing: {e}", colored_output)
+        print(error_text)
         storage.write_artists_ledger(ledger)
         raise
