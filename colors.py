@@ -118,6 +118,11 @@ class Colors:
         """Make text blue (info color)"""
         return cls.blue(text, enabled)
 
+    @classmethod
+    def dim(cls, text: str, enabled: bool = True) -> str:
+        """Make text dim/faded"""
+        return cls.colorize(text, cls.DIM, enabled)
+
 
 # Convenience function for easy imports
 def colorize_status(status: str, enabled: bool = True) -> str:
