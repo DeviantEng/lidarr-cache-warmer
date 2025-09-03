@@ -13,38 +13,76 @@ import aiohttp
 from storage import iso_now
 from colors import Colors
 
+# Import unidecode with fallback
+try:
+    from unidecode import unidecode
+    UNIDECODE_AVAILABLE = True
+except ImportError:
+    UNIDECODE_AVAILABLE = False
+
 
 def process_artist_name_for_text_search(
     artist_name: str, 
     convert_to_lowercase: bool = False, 
+    transliterate_unicode: bool = False,
+    # Keep old parameter for backwards compatibility but deprecate
     remove_symbols_and_diacritics: bool = False
 ) -> str:
     """
-    Process artist name for text search based on configuration options.
+    Process artist name for text search with improved Unicode handling.
     
     Args:
         artist_name: Original artist name from database/API
         convert_to_lowercase: Whether to convert to lowercase
-        remove_symbols_and_diacritics: Whether to remove symbols and diacritics
+        transliterate_unicode: Whether to transliterate Unicode to ASCII (recommended)
+        remove_symbols_and_diacritics: DEPRECATED - use transliterate_unicode instead
         
     Returns:
         Processed artist name for text search
         
     Examples:
-        >>> process_artist_name_for_text_search("Café Tacvba", False, True)
-        'Cafe Tacvba'
-        >>> process_artist_name_for_text_search("Metallica", True, False)
-        'metallica'
+        >>> process_artist_name_for_text_search("Słoń", False, True)
+        'Slon'
+        >>> process_artist_name_for_text_search("仮BAND", False, True) 
+        'Jia BAND'
+        >>> process_artist_name_for_text_search("古代祐三", False, True)
+        'Gu Dai You San'
         >>> process_artist_name_for_text_search("Sigur Rós", True, True)
         'sigur ros'
+        >>> process_artist_name_for_text_search("Café Tacvba", False, True)
+        'Cafe Tacvba'
     """
     if not artist_name or not artist_name.strip():
         return artist_name
         
     processed_name = artist_name.strip()
 
-    if remove_symbols_and_diacritics:
-        # Remove diacritics (accents, umlauts, etc.)
+    # New improved approach using unidecode
+    if transliterate_unicode:
+        if UNIDECODE_AVAILABLE:
+            # This preserves meaning while making text ASCII-safe
+            processed_name = unidecode(processed_name)
+            
+            # Clean up any remaining problematic characters but preserve letters/numbers
+            processed_name = re.sub(r'[^\w\s\-\.]', ' ', processed_name)
+            processed_name = re.sub(r'\s+', ' ', processed_name).strip()
+        else:
+            # Fallback: warn user and use basic normalization
+            print("WARNING: unidecode not available. Install with: pip install unidecode")
+            print(f"         Using basic normalization for: {artist_name}")
+            
+            # Basic fallback normalization
+            processed_name = unicodedata.normalize('NFKD', processed_name)
+            processed_name = ''.join(c for c in processed_name if not unicodedata.combining(c))
+            processed_name = re.sub(r'[^\w\s\-\.]', ' ', processed_name)
+            processed_name = re.sub(r'\s+', ' ', processed_name).strip()
+            
+    # Fallback to old method if explicitly requested
+    elif remove_symbols_and_diacritics:
+        print("WARNING: remove_symbols_and_diacritics is deprecated and destroys non-Latin text.")
+        print("         Use transliterate_unicode=True for better international support.")
+        
+        # Original aggressive method (kept for backwards compatibility)
         processed_name = unicodedata.normalize('NFKD', processed_name)
         processed_name = ''.join(c for c in processed_name if not unicodedata.combining(c))
 
@@ -206,6 +244,7 @@ async def check_text_search_with_cache_warming(
     delay_between_attempts: float = 0.5,
     timeout: int = 10,
     convert_to_lowercase: bool = False,
+    transliterate_unicode: bool = False,
     remove_symbols_and_diacritics: bool = False
 ) -> Tuple[str, str, int, float]:
     """
@@ -217,7 +256,10 @@ async def check_text_search_with_cache_warming(
     
     # Process artist name based on configuration options
     processed_name = process_artist_name_for_text_search(
-        artist_name, convert_to_lowercase, remove_symbols_and_diacritics
+        artist_name, 
+        convert_to_lowercase, 
+        transliterate_unicode,
+        remove_symbols_and_diacritics
     )
     
     # URL encode the processed artist name for the query
@@ -303,6 +345,7 @@ async def check_text_searches_concurrent_with_timing(
             processed_name = process_artist_name_for_text_search(
                 name, 
                 cfg.get("artist_textsearch_lowercase", False), 
+                cfg.get("artist_textsearch_transliterate_unicode", False),
                 cfg.get("artist_textsearch_remove_symbols", False)
             )
             
@@ -321,6 +364,7 @@ async def check_text_searches_concurrent_with_timing(
                     cfg["delay_between_attempts"],
                     cfg["timeout_seconds"],
                     cfg.get("artist_textsearch_lowercase", False),
+                    cfg.get("artist_textsearch_transliterate_unicode", False),
                     cfg.get("artist_textsearch_remove_symbols", False)
                 )
                 
@@ -457,18 +501,31 @@ def process_text_search(to_check: List[str], ledger: Dict[str, Dict], cfg: dict,
     print(f"Settings: {cfg['max_attempts_per_artist_textsearch']} attempts, {cfg['delay_between_attempts']}s delay, "
           f"{cfg['max_concurrent_requests']} concurrent, {cfg['rate_limit_per_second']} req/sec")
     
-    # Show text processing configuration if enabled
-    if cfg.get("artist_textsearch_lowercase", False) or cfg.get("artist_textsearch_remove_symbols", False):
-        processing_options = []
-        if cfg.get("artist_textsearch_lowercase", False):
-            processing_options.append("lowercase conversion")
-        if cfg.get("artist_textsearch_remove_symbols", False):
-            processing_options.append("symbol/diacritic removal")
+    # Show text processing configuration
+    processing_options = []
+    if cfg.get("artist_textsearch_lowercase", False):
+        processing_options.append("lowercase conversion")
+    if cfg.get("artist_textsearch_transliterate_unicode", False):
+        if UNIDECODE_AVAILABLE:
+            processing_options.append("Unicode transliteration (unidecode)")
+        else:
+            processing_options.append("Unicode transliteration (MISSING unidecode - install required!)")
+    if cfg.get("artist_textsearch_remove_symbols", False):
+        processing_options.append("symbol removal (DEPRECATED)")
+    
+    if processing_options:
         processing_text = Colors.cyan(f"Text processing: {', '.join(processing_options)}", colored_output)
         print(processing_text)
     else:
         disabled_text = Colors.dim("Text processing: disabled (using original artist names)", colored_output)
         print(disabled_text)
+    
+    # Warn about missing unidecode if transliteration is enabled
+    if cfg.get("artist_textsearch_transliterate_unicode", False) and not UNIDECODE_AVAILABLE:
+        warning_text = Colors.warning("⚠️  WARNING: unidecode not installed but transliteration enabled!", colored_output)
+        print(warning_text)
+        print("   Install with: pip install unidecode")
+        print("   Falling back to basic normalization (may not work well for non-Latin scripts)")
     
     try:
         if cfg.get("batch_size", 25) < len(to_check):

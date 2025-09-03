@@ -61,7 +61,8 @@ batch_size = 25
 batch_write_frequency = 5
 
 # Text search preprocessing options
-artist_textsearch_lowercase = false
+artist_textsearch_lowercase = true
+artist_textsearch_transliterate_unicode = true
 artist_textsearch_remove_symbols = false
 
 # Cache freshness settings
@@ -191,7 +192,8 @@ def load_config(path: str) -> dict:
         "update_lidarr": parse_bool(cp.get("actions", "update_lidarr", fallback="false")),
         
         # Text search processing options
-        "artist_textsearch_lowercase": parse_bool(cp.get("run", "artist_textsearch_lowercase", fallback="false")),
+        "artist_textsearch_lowercase": parse_bool(cp.get("run", "artist_textsearch_lowercase", fallback="true")),
+        "artist_textsearch_transliterate_unicode": parse_bool(cp.get("run", "artist_textsearch_transliterate_unicode", fallback="true")),
         "artist_textsearch_remove_symbols": parse_bool(cp.get("run", "artist_textsearch_remove_symbols", fallback="false")),
         
         # Manual entries with path resolution

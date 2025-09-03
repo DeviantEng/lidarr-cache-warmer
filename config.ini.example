@@ -72,8 +72,15 @@ batch_write_frequency = 5
 # Text search preprocessing options
 # Convert artist names to lowercase before text search (e.g., Metallica -> metallica)
 artist_textsearch_lowercase = true
-# Remove symbols and diacritics from artist names (e.g., Café Tacvba -> Cafe Tacvba)
-artist_textsearch_remove_symbols = true
+
+# NEW: Improved Unicode handling - transliterates to ASCII while preserving meaning
+# Examples: Słoń -> Slon, 仮BAND -> Jia BAND, Café Tacvba -> Cafe Tacvba
+# RECOMMENDED for international music libraries
+artist_textsearch_transliterate_unicode = true
+
+# DEPRECATED: Old aggressive symbol removal (removes meaning from non-Latin scripts)
+# Use transliterate_unicode instead for better results
+artist_textsearch_remove_symbols = false
 
 # Cache freshness settings
 # Re-check successful cache entries after this many hours (default: 72)
