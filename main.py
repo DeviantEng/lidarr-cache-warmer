@@ -106,38 +106,6 @@ def get_lidarr_release_groups(base_url: str, api_key: str, verify_ssl: bool = Tr
     )
 
 
-def remove_various_artists_from_lidarr(base_url: str, api_key: str, artist_id: int, verify_ssl: bool = True, timeout: int = 30) -> bool:
-    """Remove Various Artists and all its albums from Lidarr"""
-    session = requests.Session()
-    headers = {"X-Api-Key": api_key}
-    
-    # Configure SSL verification
-    session.verify = verify_ssl
-    if not verify_ssl:
-        import urllib3
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    
-    # Try different API endpoints for artist deletion
-    endpoints = ["/api/v1/artist", "/api/artist", "/api/v3/artist"]
-    
-    for endpoint in endpoints:
-        url = f"{base_url.rstrip('/')}{endpoint}/{artist_id}"
-        try:
-            # Delete with deleteFiles=true to remove all associated files and albums
-            response = session.delete(url, params={"deleteFiles": "true", "addImportListExclusion": "true"}, timeout=timeout)
-            if response.status_code in (200, 204, 404):  # 404 means already gone
-                print(f"   ✅ Successfully removed Various Artists from Lidarr (endpoint: {endpoint})")
-                return True
-            elif response.status_code != 404:
-                print(f"   ⚠️  Delete attempt returned {response.status_code} (endpoint: {endpoint})")
-        except Exception as e:
-            print(f"   ⚠️  Error deleting via {endpoint}: {e}")
-            continue
-    
-    print(f"   ❌ Failed to remove Various Artists from all API endpoints")
-    return False
-
-
 def check_and_handle_various_artists(artists: List[Dict], cfg: dict) -> tuple[List[Dict], bool]:
     """
     Check for Various Artists (89ad4ac3-39f7-470e-963a-56509c546377) and filter it out.
@@ -369,21 +337,16 @@ def main():
         print("Fetching artists from Lidarr...")
         artists = get_lidarr_artists(cfg["lidarr_url"], cfg["api_key"], cfg.get("verify_ssl", True), cfg["lidarr_timeout"])
         
-        # *** NEW: Check for and remove Various Artists ***
-        artists, various_artists_deleted = check_and_handle_various_artists(artists, cfg)
+        # Check for and filter out Various Artists
+        artists, various_artists_detected = check_and_handle_various_artists(artists, cfg)
         
         print(f"✅ Found {len(artists)} artists in Lidarr (after filtering)")
         
         if cfg["process_release_groups"]:
-            # Wait for Various Artists deletion to complete before fetching release groups
-            if various_artists_deleted:
-                print("⏱️  Waiting 30 seconds for Lidarr to complete Various Artists deletion...")
-                time.sleep(30)
-            
             print("Fetching release groups from Lidarr...")
             release_groups = get_lidarr_release_groups(cfg["lidarr_url"], cfg["api_key"], cfg.get("verify_ssl", True), cfg["lidarr_timeout"])
             
-            # *** NEW: Filter out release groups from Various Artists ***
+            # Filter out release groups from Various Artists
             allowed_artist_mbids = {artist["mbid"] for artist in artists}
             release_groups = filter_release_groups_by_artist(release_groups, allowed_artist_mbids)
             
@@ -683,7 +646,7 @@ def main():
     try:
         # Use config directory + data subdirectory for results log
         config_dir = os.path.dirname(os.path.abspath(args.config))
-        results_dir = config_dir if config_dir else "."
+        results_dir = os.path.join(config_dir, "data") if config_dir else "./data"
         os.makedirs(results_dir, exist_ok=True)
         
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
