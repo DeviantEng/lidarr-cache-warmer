@@ -5,6 +5,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
+from urllib.parse import urljoin
 
 import requests
 from config import load_config, validate_config
@@ -24,15 +25,20 @@ def get_lidarr_artists(base_url: str, api_key: str, verify_ssl: bool = True, tim
         import urllib3
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+    # Ensure base_url ends with / for proper URL joining
+    if not base_url.endswith('/'):
+        base_url += '/'
+
     candidates = [
-        "/api/v1/artist",
-        "/api/artist", 
-        "/api/v3/artist",
+        "api/v1/artist",
+        "api/artist", 
+        "api/v3/artist",
     ]
 
     last_exc = None
     for path in candidates:
-        url = f"{base_url.rstrip('/')}{path}"
+        # Use urljoin to properly handle subpaths
+        url = urljoin(base_url, path)
         try:
             r = session.get(url, headers=headers, timeout=timeout)
             if r.status_code == 404:
@@ -67,15 +73,20 @@ def get_lidarr_release_groups(base_url: str, api_key: str, verify_ssl: bool = Tr
         import urllib3
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+    # Ensure base_url ends with / for proper URL joining
+    if not base_url.endswith('/'):
+        base_url += '/'
+
     candidates = [
-        "/api/v1/album",
-        "/api/album", 
-        "/api/v3/album",
+        "api/v1/album",
+        "api/album", 
+        "api/v3/album",
     ]
 
     last_exc = None
     for path in candidates:
-        url = f"{base_url.rstrip('/')}{path}"
+        # Use urljoin to properly handle subpaths
+        url = urljoin(base_url, path)
         try:
             r = session.get(url, headers=headers, timeout=timeout)
             if r.status_code == 404:
@@ -178,13 +189,18 @@ def trigger_lidarr_refresh(base_url: str, api_key: str, artist_id: Optional[int]
     if not verify_ssl:
         import urllib3
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    
+    # Ensure base_url ends with / for proper URL joining
+    if not base_url.endswith('/'):
+        base_url += '/'
         
     payloads = [
         {"name": "RefreshArtist", "artistIds": [artist_id]},
         {"name": "RefreshArtist", "artistId": artist_id},
     ]
-    for path in ("/api/v1/command", "/api/command"):
-        url = f"{base_url.rstrip('/')}{path}"
+    for path in ("api/v1/command", "api/command"):
+        # Use urljoin to properly handle subpaths
+        url = urljoin(base_url, path)
         for body in payloads:
             try:
                 session.post(url, headers=headers, json=body, timeout=timeout)
