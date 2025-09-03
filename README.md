@@ -4,20 +4,6 @@ Cache warming tool for **Lidarr** metadata. Fetches artist and release group MBI
 
 **Multi-phase processing**: Warms artist MBID cache first, then artist text search cache, then release group cache (each phase optional and configurable).
 
-## ⚠️ Various Artists Protection
-
-**The cache warmer automatically detects "Various Artists" and excludes it from cache warming.** This artist (MBID: `89ad4ac3-39f7-470e-963a-56509c546377`) typically contains 100,000+ albums and causes severe performance issues.
-
-**Why this happens:** Lidarr has built-in protection to prevent adding Various Artists, but recent development changes occasionally allowed this artist to be added despite the protection.
-
-**What happens:** If detected, the cache warmer will:
-- 🚨 Alert you that Various Artists was found
-- ⚠️ Skip Various Artists entirely - it will not be processed for cache warming
-- 🚫 Exclude all Various Artists albums from processing
-- ✅ Continue processing other artists normally
-
-This provides performance protection while leaving your Lidarr library unchanged.
-
 ## 🕐 Cache Freshness Management
 
 The cache warmer intelligently manages cache freshness to handle cache expiration:
@@ -163,9 +149,14 @@ verify_ssl = false         # Disable SSL verification
 ### International Music Libraries
 ```ini
 [run]
-artist_textsearch_lowercase = true        # Better search matching
-artist_textsearch_remove_symbols = true  # Handle diacritics (é, ñ, ü)
+artist_textsearch_lowercase = true        # Mirrors Lidarr's search behavior (default)
+artist_textsearch_transliterate_unicode = true  # Handle international characters (default)
 ```
+
+**Why these defaults work well:**
+- **Lowercase matching**: Lidarr's search is case-insensitive, so lowercase queries match better
+- **Unicode transliteration**: Converts `Słoń` → `slon`, `仮BAND` → `jia band`, `Café` → `cafe`
+- **Better cache hit rates**: International artists get found more reliably
 
 ### High-Performance Setup
 ```ini
@@ -313,11 +304,11 @@ Cache warming is perfect for APIs where:
 - **Smart retry logic**: Different retry strategies for different types of cache misses
 
 ### Text Search Cache Warming Strategy
-The text search feature specifically targets the search-by-name cache system:
+The text search feature targets the search-by-name cache system and mirrors Lidarr's search behavior:
 
-1. **Text Preprocessing**: Configurable normalization for international artists
-   - **Lowercase conversion**: "Metallica" → "metallica" 
-   - **Symbol/diacritic removal**: "Sigur Rós" → "sigur ros", "Café Tacvba" → "cafe tacvba"
+1. **Text Preprocessing**: Smart normalization for international artists (enabled by default)
+   - **Lowercase conversion**: "Metallica" → "metallica" (matches Lidarr's case-insensitive search)
+   - **Unicode transliteration**: "Słoń" → "slon", "仮BAND" → "jia band", "Café Tacvba" → "cafe tacvba"
 2. **URL Encoding**: Properly handles special characters in artist names
 3. **Query Format**: Uses `?type=all&query={artist_name}` format for comprehensive results
 4. **Cache Building**: Retries 503 responses as the search index builds
@@ -343,12 +334,23 @@ a8c1eb9a-2fb4-4f4f-8ada-62f30e27a1af:
 
 ---
 
-## 📄 Recent Changes (Latest)
+## ✨ What's New in Recent Versions
+
+### v1.8.0 Features (Current)
+- **🌍 Improved Unicode Support**: Better international character handling with `unidecode`
+- **🎯 Optimized Defaults**: Text search now mirrors Lidarr's behavior by default
+  - `artist_textsearch_lowercase = true` (matches Lidarr's case-insensitive search)
+  - `artist_textsearch_transliterate_unicode = true` (converts international characters intelligently)
+- **⚡ Performance**: Removed unnecessary 30-second delay when Various Artists detected
+- **📝 Better Documentation**: Clearer configuration guidance for international music libraries
 
 ### v1.7.0 Features
 - **🕐 Cache Freshness Management**: Automatic re-checking of successful entries after configurable hours
 - **📊 Staleness Statistics**: Statistics show which entries are due for refresh and when
-- **⚠️ Various Artists Filtering**: Detection and exclusion (not deletion) of Various Artists from processing
+- **⚠️ Various Artists Protection**: Automatic detection and exclusion of Various Artists from processing
+  - Detects Various Artists (MBID: `89ad4ac3-39f7-470e-963a-56509c546377`) which typically contains 100,000+ albums
+  - Filters out Various Artists and all its albums to prevent severe performance issues
+  - Provides protection while leaving your Lidarr library unchanged (no deletion)
 - **🔧 Improved Path Resolution**: Enhanced file path handling in Docker environments
 - **📈 Enhanced Statistics**: Detailed breakdown of processing reasons including staleness
 
@@ -358,9 +360,21 @@ a8c1eb9a-2fb4-4f4f-8ada-62f30e27a1af:
 - **🌐 Better SSL Support**: Improved handling of `verify_ssl` and `lidarr_timeout` in stats collection
 
 ### Migration Notes
+- **New Text Search Defaults**: Fresh installations now optimize for international music automatically
+  - Existing configs continue working but may show recommendations to upgrade
+  - Update your config for better results: `artist_textsearch_transliterate_unicode = true`
+- **Unicode Processing**: Install `unidecode` for best international character support: `pip install unidecode`
 - **Cache Freshness**: New installations default to 72-hour re-checking. Set `cache_recheck_hours = 0` for legacy behavior
 - **Various Artists**: Now filtered out instead of deleted - your Lidarr library remains unchanged
 - **File paths**: Remove `./data/` prefixes from paths in your `config.ini` if upgrading from very old versions
+
+**Your examples will now work much better with the new defaults:**
+- `Słoń` → `slon` (Polish properly transliterated + lowercase)
+- `仮BAND` → `jia band` (Japanese readable + lowercase)  
+- `古代祐三` → `gu dai you san` (Chinese romanized + lowercase)
+- `Metallica` → `metallica` (matches Lidarr's search behavior)
+
+The cache warmer now mirrors Lidarr's text processing by default, giving much better search success rates for international music libraries!
 
 ---
 

@@ -217,7 +217,8 @@ def format_config_summary(cfg: dict) -> str:
         f"     • cache_recheck_hours: {cfg.get('cache_recheck_hours', 72)}",
         f"   Text Search Processing:",
         f"     • artist_textsearch_lowercase: {cfg.get('artist_textsearch_lowercase', False)}",
-        f"     • artist_textsearch_remove_symbols: {cfg.get('artist_textsearch_remove_symbols', False)}",
+        f"     • artist_textsearch_transliterate_unicode: {cfg.get('artist_textsearch_transliterate_unicode', False)}",
+        f"     • artist_textsearch_remove_symbols: {cfg.get('artist_textsearch_remove_symbols', False)} (deprecated)",
         f"   Storage Backend:",
         f"     • storage_type: {storage_type}",
     ]
@@ -346,6 +347,20 @@ def print_stats_report(cfg: dict):
         else:
             print(f"   ⏳ Text searches pending: {artist_stats['text_search_pending']:,} (none attempted yet)")
         
+        # Show text processing configuration
+        text_processing_options = []
+        if cfg.get('artist_textsearch_lowercase', False):
+            text_processing_options.append("lowercase")
+        if cfg.get('artist_textsearch_transliterate_unicode', False):
+            text_processing_options.append("Unicode transliteration")
+        if cfg.get('artist_textsearch_remove_symbols', False):
+            text_processing_options.append("symbol removal (deprecated)")
+        
+        if text_processing_options:
+            print(f"   ⚙️  Text processing: {', '.join(text_processing_options)}")
+        else:
+            print(f"   ⚙️  Text processing: disabled (original names)")
+        
         print()
     else:
         print("🔍 TEXT SEARCH WARMING: Disabled")
@@ -415,6 +430,25 @@ def print_stats_report(cfg: dict):
         print("   WARNING: Only use this in trusted private networks")
         print()
     
+    # Unicode processing check
+    if cfg.get('artist_textsearch_transliterate_unicode', True):
+        try:
+            from unidecode import unidecode
+            print("🌍 UNICODE SUPPORT: Enabled (unidecode available)")
+            print("   International artists will be transliterated for better search results")
+        except ImportError:
+            print("⚠️  UNICODE SUPPORT: Enabled but unidecode missing!")
+            print("   Install with: pip install unidecode")
+            print("   Falling back to basic normalization (may not work well)")
+        print()
+    
+    # Check for deprecated option usage
+    if cfg.get('artist_textsearch_remove_symbols', False):
+        print("⚠️  DEPRECATED OPTION DETECTED:")
+        print("   artist_textsearch_remove_symbols is deprecated and may damage non-Latin text")
+        print("   Please update config.ini to use artist_textsearch_transliterate_unicode=true instead")
+        print()
+    
     # Next steps recommendations
     print("🚀 RECOMMENDATIONS:")
     
@@ -438,13 +472,22 @@ def print_stats_report(cfg: dict):
     if total_entities > 1000 and storage_type == "csv":
         print("   • Switch to SQLite for better performance: storage_type = sqlite")
     
+    # Show stale entries recommendations
+    if artist_stats['recheck_enabled']:
+        if artist_stats['stale_mbid_cache'] > 0:
+            print(f"   • Process {artist_stats['stale_mbid_cache']:,} stale MBID cache entries")
+        if artist_stats['stale_text_search'] > 0:
+            print(f"   • Process {artist_stats['stale_text_search']:,} stale text search entries")
+        if cfg.get("process_release_groups") and rg_stats.get('stale_entries', 0) > 0:
+            print(f"   • Process {rg_stats['stale_entries']:,} stale release group entries")
+    
     # Show phase processing order
     phases_enabled = []
-    if artist_stats['pending'] > 0:
+    if artist_stats['pending'] > 0 or (artist_stats['recheck_enabled'] and artist_stats['stale_mbid_cache'] > 0):
         phases_enabled.append("Phase 1: Artist MBID warming")
-    if cfg.get("process_artist_textsearch") and artist_stats['text_search_pending'] > 0:
+    if cfg.get("process_artist_textsearch") and (artist_stats['text_search_pending'] > 0 or (artist_stats['recheck_enabled'] and artist_stats['stale_text_search'] > 0)):
         phases_enabled.append("Phase 2: Text search warming")  
-    if cfg.get("process_release_groups") and rg_stats.get('pending', 0) > 0:
+    if cfg.get("process_release_groups") and (rg_stats.get('pending', 0) > 0 or (rg_stats['recheck_enabled'] and rg_stats.get('stale_entries', 0) > 0)):
         phases_enabled.append("Phase 3: Release group warming")
     
     if phases_enabled:
