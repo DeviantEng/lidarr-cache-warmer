@@ -431,7 +431,7 @@ def print_stats_report(cfg: dict):
         print()
     
     # Unicode processing check
-    if cfg.get('artist_textsearch_transliterate_unicode', False):
+    if cfg.get('artist_textsearch_transliterate_unicode', True):
         try:
             from unidecode import unidecode
             print("🌍 UNICODE SUPPORT: Enabled (unidecode available)")
@@ -440,6 +440,13 @@ def print_stats_report(cfg: dict):
             print("⚠️  UNICODE SUPPORT: Enabled but unidecode missing!")
             print("   Install with: pip install unidecode")
             print("   Falling back to basic normalization (may not work well)")
+        print()
+    
+    # Check for deprecated option usage
+    if cfg.get('artist_textsearch_remove_symbols', False):
+        print("⚠️  DEPRECATED OPTION DETECTED:")
+        print("   artist_textsearch_remove_symbols is deprecated and may damage non-Latin text")
+        print("   Please update config.ini to use artist_textsearch_transliterate_unicode=true instead")
         print()
     
     # Next steps recommendations

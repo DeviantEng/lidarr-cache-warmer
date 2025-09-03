@@ -503,15 +503,15 @@ def process_text_search(to_check: List[str], ledger: Dict[str, Dict], cfg: dict,
     
     # Show text processing configuration
     processing_options = []
-    if cfg.get("artist_textsearch_lowercase", False):
+    if cfg.get("artist_textsearch_lowercase", True):
         processing_options.append("lowercase conversion")
-    if cfg.get("artist_textsearch_transliterate_unicode", False):
+    if cfg.get("artist_textsearch_transliterate_unicode", True):
         if UNIDECODE_AVAILABLE:
             processing_options.append("Unicode transliteration (unidecode)")
         else:
             processing_options.append("Unicode transliteration (MISSING unidecode - install required!)")
     if cfg.get("artist_textsearch_remove_symbols", False):
-        processing_options.append("symbol removal (DEPRECATED)")
+        processing_options.append("symbol removal (DEPRECATED - use transliterate_unicode)")
     
     if processing_options:
         processing_text = Colors.cyan(f"Text processing: {', '.join(processing_options)}", colored_output)
@@ -521,11 +521,18 @@ def process_text_search(to_check: List[str], ledger: Dict[str, Dict], cfg: dict,
         print(disabled_text)
     
     # Warn about missing unidecode if transliteration is enabled
-    if cfg.get("artist_textsearch_transliterate_unicode", False) and not UNIDECODE_AVAILABLE:
+    if cfg.get("artist_textsearch_transliterate_unicode", True) and not UNIDECODE_AVAILABLE:
         warning_text = Colors.warning("⚠️  WARNING: unidecode not installed but transliteration enabled!", colored_output)
         print(warning_text)
         print("   Install with: pip install unidecode")
         print("   Falling back to basic normalization (may not work well for non-Latin scripts)")
+    
+    # Warn about deprecated option usage
+    if cfg.get("artist_textsearch_remove_symbols", False):
+        deprecated_text = Colors.warning("⚠️  WARNING: artist_textsearch_remove_symbols is deprecated!", colored_output)
+        print(deprecated_text)
+        print("   Please update config.ini to use artist_textsearch_transliterate_unicode=true instead")
+        print("   The old option may damage non-Latin artist names")
     
     try:
         if cfg.get("batch_size", 25) < len(to_check):

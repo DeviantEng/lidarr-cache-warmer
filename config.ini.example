@@ -70,16 +70,17 @@ batch_size = 25
 batch_write_frequency = 5
 
 # Text search preprocessing options
-# Convert artist names to lowercase before text search (e.g., Metallica -> metallica)
+# Convert artist names to lowercase before text search (mirrors Lidarr behavior)
+# Example: Metallica -> metallica (default: true, matches Lidarr)
 artist_textsearch_lowercase = true
 
-# NEW: Improved Unicode handling - transliterates to ASCII while preserving meaning
+# Transliterate Unicode characters to ASCII while preserving meaning
 # Examples: Słoń -> Slon, 仮BAND -> Jia BAND, Café Tacvba -> Cafe Tacvba
-# RECOMMENDED for international music libraries
+# RECOMMENDED for international music libraries (default: true)
 artist_textsearch_transliterate_unicode = true
 
-# DEPRECATED: Old aggressive symbol removal (removes meaning from non-Latin scripts)
-# Use transliterate_unicode instead for better results
+# DEPRECATED: Use transliterate_unicode instead (kept for backwards compatibility)
+# This option has been renamed and functionality moved to transliterate_unicode
 artist_textsearch_remove_symbols = false
 
 # Cache freshness settings
