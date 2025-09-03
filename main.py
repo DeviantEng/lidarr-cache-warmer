@@ -683,7 +683,7 @@ def main():
     try:
         # Use config directory + data subdirectory for results log
         config_dir = os.path.dirname(os.path.abspath(args.config))
-        results_dir = os.path.join(config_dir, "data") if config_dir else "./data"
+        results_dir = config_dir if config_dir else "."
         os.makedirs(results_dir, exist_ok=True)
         
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
