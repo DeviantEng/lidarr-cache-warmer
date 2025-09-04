@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import sqlite3
 import sys
 from datetime import datetime, timezone
 from typing import Dict
@@ -234,7 +235,227 @@ def format_config_summary(cfg: dict) -> str:
     return "\n".join(config_lines)
 
 
-def print_stats_report(cfg: dict):
+def print_canary_analysis(storage) -> None:
+    """Print detailed canary response target analysis"""
+    print()
+    print("=" * 60)
+    print("🎯 CANARY RESPONSE TARGET ANALYSIS")
+    print("=" * 60)
+    
+    try:
+        canary_stats = storage.get_canary_statistics()
+        
+        if not canary_stats:
+            print("📊 No canary response data available")
+            print("   This is normal for:")
+            print("   • CSV storage (limited canary tracking)")
+            print("   • Fresh installations")
+            print("   • APIs that don't set x-canary-response-target header")
+            return
+        
+        print(f"📊 Found {len(canary_stats)} canary targets with response data")
+        print()
+        
+        # Calculate overall statistics
+        total_requests = 0
+        total_successes = 0
+        
+        for target_name, target_data in canary_stats.items():
+            for op_type, op_stats in target_data.get("operations", {}).items():
+                total_requests += op_stats["total_requests"]
+                total_successes += op_stats["successful_requests"]
+        
+        overall_success_rate = (total_successes / total_requests * 100) if total_requests > 0 else 0.0
+        
+        print(f"🌍 OVERALL CANARY STATISTICS:")
+        print(f"   Total requests across all targets: {total_requests:,}")
+        print(f"   Total successful requests: {total_successes:,}")
+        print(f"   Overall success rate: {overall_success_rate:.1f}%")
+        
+        # Show failure breakdown if there are any failures
+        total_failures = total_requests - total_successes
+        if total_failures > 0:
+            print(f"   Total failed requests: {total_failures:,}")
+            
+            # Get failure breakdown by status code (only works with SQLite storage)
+            if hasattr(storage, 'db_path') and os.path.exists(storage.db_path):
+                try:
+                    with sqlite3.connect(storage.db_path) as conn:
+                        conn.row_factory = sqlite3.Row
+                        cursor = conn.execute("""
+                            SELECT status_code, COUNT(*) as count
+                            FROM canary_responses 
+                            WHERE success = 0 AND canary_target != ''
+                            GROUP BY status_code
+                            ORDER BY count DESC
+                        """)
+                        
+                        failure_codes = cursor.fetchall()
+                        if failure_codes:
+                            print(f"   Failure breakdown:")
+                            for row in failure_codes:
+                                status_code = row["status_code"]
+                                count = row["count"]
+                                
+                                # Add description for common status codes
+                                if status_code == "429":
+                                    description = "(rate limited)"
+                                elif status_code == "503":
+                                    description = "(service unavailable)"
+                                elif status_code == "404":
+                                    description = "(not found)"
+                                elif status_code == "500":
+                                    description = "(server error)"
+                                elif status_code.startswith("EXC:"):
+                                    description = "(connection exception)"
+                                elif status_code == "TIMEOUT":
+                                    description = "(request timeout)"
+                                else:
+                                    description = ""
+                                
+                                print(f"     • {count} × HTTP {status_code} {description}")
+                except Exception as e:
+                    print(f"   (Could not retrieve failure breakdown: {e})")
+        
+        print()
+        
+        # Show successful request distribution between targets
+        if total_successes > 0:
+            print(f"📊 SUCCESSFUL REQUEST DISTRIBUTION:")
+            success_distribution = []
+            for target_name, target_data in canary_stats.items():
+                target_successes = 0
+                for op_stats in target_data.get("operations", {}).values():
+                    target_successes += op_stats["successful_requests"]
+                
+                if target_successes > 0:
+                    success_percentage = (target_successes / total_successes * 100)
+                    success_distribution.append({
+                        "name": target_name,
+                        "successes": target_successes,
+                        "percentage": success_percentage
+                    })
+            
+            # Sort by success count (highest first)
+            success_distribution.sort(key=lambda x: x["successes"], reverse=True)
+            
+            for dist in success_distribution:
+                print(f"   {dist['name']}: {dist['successes']:,} successful requests ({dist['percentage']:.1f}%)")
+            print()
+        
+        # Sort targets by success rate (lowest first to highlight problems)
+        sorted_targets = []
+        for target_name, target_data in canary_stats.items():
+            target_total_requests = 0
+            target_total_successes = 0
+            
+            for op_stats in target_data.get("operations", {}).values():
+                target_total_requests += op_stats["total_requests"]
+                target_total_successes += op_stats["successful_requests"]
+            
+            target_success_rate = (target_total_successes / target_total_requests * 100) if target_total_requests > 0 else 0.0
+            
+            sorted_targets.append({
+                "name": target_name,
+                "success_rate": target_success_rate,
+                "total_requests": target_total_requests,
+                "total_successes": target_total_successes,
+                "data": target_data
+            })
+        
+        # Sort by success rate (lowest first)
+        sorted_targets.sort(key=lambda x: x["success_rate"])
+        
+        print("🎯 CANARY TARGET BREAKDOWN (sorted by success rate):")
+        print()
+        
+        for target in sorted_targets:
+            target_name = target["name"]
+            target_success_rate = target["success_rate"]
+            target_requests = target["total_requests"]
+            target_data = target["data"]
+            
+            # Color code based on success rate
+            if target_success_rate >= 95:
+                status_icon = "✅"
+            elif target_success_rate >= 80:
+                status_icon = "⚠️ "
+            else:
+                status_icon = "❌"
+            
+            print(f"{status_icon} {target_name}")
+            print(f"   Overall: {target_success_rate:.1f}% success ({target["total_successes"]:,}/{target_requests:,} requests)")
+            
+            # Show first/last seen if available
+            if "first_seen" in target_data and "last_seen" in target_data:
+                try:
+                    first_seen = datetime.fromisoformat(target_data["first_seen"].replace('Z', '+00:00'))
+                    last_seen = datetime.fromisoformat(target_data["last_seen"].replace('Z', '+00:00'))
+                    print(f"   Active: {first_seen.strftime('%Y-%m-%d %H:%M')} to {last_seen.strftime('%Y-%m-%d %H:%M')} UTC")
+                except Exception:
+                    pass
+            
+            # Break down by operation type
+            operations = target_data.get("operations", {})
+            if len(operations) > 1:
+                print(f"   Operations breakdown:")
+                for op_type, op_stats in operations.items():
+                    op_success_rate = op_stats["success_rate"]
+                    op_requests = op_stats["total_requests"]
+                    op_successes = op_stats["successful_requests"]
+                    
+                    # Color code operation success rate
+                    if op_success_rate >= 95:
+                        op_icon = "  ✅"
+                    elif op_success_rate >= 80:
+                        op_icon = "  ⚠️ "
+                    else:
+                        op_icon = "  ❌"
+                    
+                    print(f"{op_icon} {op_type}: {op_success_rate:.1f}% ({op_successes:,}/{op_requests:,})")
+            
+            print()
+        
+        # Recommendations
+        print("🚀 CANARY ANALYSIS RECOMMENDATIONS:")
+        
+        problem_targets = [t for t in sorted_targets if t["success_rate"] < 80]
+        warning_targets = [t for t in sorted_targets if 80 <= t["success_rate"] < 95]
+        
+        if problem_targets:
+            print(f"   ❌ {len(problem_targets)} target(s) with concerning success rates (<80%):")
+            for target in problem_targets[:3]:  # Show top 3 worst
+                print(f"      • {target['name']}: {target['success_rate']:.1f}% success")
+            if len(problem_targets) > 3:
+                print(f"      • ... and {len(problem_targets) - 3} more")
+        
+        if warning_targets:
+            print(f"   ⚠️  {len(warning_targets)} target(s) with moderate success rates (80-95%):")
+            for target in warning_targets[:2]:  # Show top 2
+                print(f"      • {target['name']}: {target['success_rate']:.1f}% success")
+            if len(warning_targets) > 2:
+                print(f"      • ... and {len(warning_targets) - 2} more")
+        
+        good_targets = [t for t in sorted_targets if t["success_rate"] >= 95]
+        if good_targets:
+            print(f"   ✅ {len(good_targets)} target(s) performing well (≥95% success rate)")
+        
+        if problem_targets or warning_targets:
+            print()
+            print("   💡 Share this analysis with the API maintainers to help identify:")
+            print("      • Problematic canary deployments")
+            print("      • Performance differences between API versions")
+            print("      • Deployment rollback candidates")
+        
+    except Exception as e:
+        print(f"❌ Error analyzing canary data: {e}")
+        print("   This might indicate:")
+        print("   • Corrupted canary tracking data")
+        print("   • Storage backend issues")
+        print("   • Missing database tables (try running cache warmer once)")
+
+
+def print_stats_report(cfg: dict, show_canary_stats: bool = False):
     """Generate and print comprehensive stats report"""
     
     print("=" * 60)
@@ -449,6 +670,10 @@ def print_stats_report(cfg: dict):
         print("   Please update config.ini to use artist_textsearch_transliterate_unicode=true instead")
         print()
     
+    # Show canary analysis if requested
+    if show_canary_stats:
+        print_canary_analysis(storage)
+    
     # Next steps recommendations
     print("🚀 RECOMMENDATIONS:")
     
@@ -493,6 +718,9 @@ def print_stats_report(cfg: dict):
     if phases_enabled:
         print(f"   • Next run will execute: {', '.join(phases_enabled)}")
     
+    if not show_canary_stats and storage_type == "sqlite":
+        print("   • Run with --canary-stats for detailed canary target breakdown")
+    
     print()
     print("=" * 60)
 
@@ -502,6 +730,8 @@ def main():
         description="Generate statistics report for Lidarr cache warmer"
     )
     parser.add_argument("--config", required=True, help="Path to INI config (e.g., /data/config.ini)")
+    parser.add_argument("--canary-stats", action="store_true", 
+                        help="Include detailed canary response target analysis (requires SQLite storage)")
     args = parser.parse_args()
 
     try:
@@ -518,7 +748,26 @@ def main():
             print(f"  - {issue}", file=sys.stderr)
         sys.exit(2)
 
-    print_stats_report(cfg)
+    # Warn about canary analysis limitations
+    if args.canary_stats and cfg.get("storage_type", "csv").lower() != "sqlite":
+        print("⚠️  WARNING: --canary-stats with CSV storage provides very limited data!", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("   CSV storage only shows current canary targets from ledger entries.", file=sys.stderr)
+        print("   You will NOT get:", file=sys.stderr)
+        print("   • Success rate breakdowns by canary target", file=sys.stderr)
+        print("   • Historical canary response tracking", file=sys.stderr)
+        print("   • Time-based canary analysis", file=sys.stderr)
+        print("   • Detailed operation breakdowns", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("   For full canary analysis, switch to SQLite storage:", file=sys.stderr)
+        print("   1. Update config.ini: storage_type = sqlite", file=sys.stderr)
+        print("   2. Run cache warmer to start collecting detailed data", file=sys.stderr)
+        print("   3. Re-run stats with --canary-stats for full breakdown", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("   Continuing with limited CSV analysis...", file=sys.stderr)
+        print("=" * 60, file=sys.stderr)
+
+    print_stats_report(cfg, args.canary_stats)
 
 
 if __name__ == "__main__":

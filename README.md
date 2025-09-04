@@ -258,6 +258,12 @@ docker run --rm -v $(pwd)/data:/app/data --entrypoint python ghcr.io/devianteng/
 python3 stats.py --config config.ini
 ```
 
+**Canary Header Statsi (requires using SQLite storage)**
+```bash
+# add --canary-stats to the above calls; ex:
+docker run --rm -v $(pwd)/data:/app/data --entrypoint python ghcr.io/devianteng/lidarr-cache-warmer:latest /app/stats.py --config /app/data/config.ini --canary-stats
+```
+
 **Example Output with Cache Freshness:**
 ```
 🎵 LIDARR CACHE WARMER - STATISTICS REPORT
