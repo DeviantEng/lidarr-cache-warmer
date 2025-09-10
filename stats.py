@@ -555,141 +555,53 @@ def print_cf_cache_analysis(storage) -> None:
         
         print()
         
-        # Detailed breakdown
-        print("☁️ DETAILED CACHE STATUS BREAKDOWN:")
+        # Summary message
+        print("📋 CACHE STATUS SUMMARY:")
+        if cache_hit_rate >= 70:
+            print(f"   ✅ Good cache performance - {cache_hit_rate:.1f}% of requests served from cache")
+        elif cache_hit_rate >= 40:
+            print(f"   ⚠️ Moderate cache performance - {cache_hit_rate:.1f}% cache hit rate")
+        else:
+            print(f"   🔄 Cache warming in progress - {cache_hit_rate:.1f}% cache hit rate, expect improvement")
+        
+        if backend_requests > 0:
+            print(f"   Backend handling {backend_load_rate:.1f}% of requests (cache building/refreshing)")
+        
+        print()
+        
+        # Simplified detailed breakdown
+        print("☁️ CACHE STATUS BREAKDOWN:")
         
         # Sort by request count (highest first)
         sorted_statuses = sorted(cf_stats.items(), key=lambda x: x[1]["total_requests"], reverse=True)
         
         for status, status_data in sorted_statuses:
             count = status_data["total_requests"]
-            success_count = status_data["successful_requests"]
-            success_rate = status_data["success_rate"]
             percentage = (count / total_requests) * 100
             
             # Add icons and descriptions
             if status == "HIT":
                 icon = "✅"
-                description = "Served from CloudFlare cache (no backend load)"
-                impact = "Optimal - reduces backend server load"
+                description = "Served directly from CloudFlare cache"
             elif status == "STALE":
                 icon = "⚠️"
-                description = "Stale content served while backend refreshes cache"
-                impact = "Medium - triggers backend refresh but serves stale content"
+                description = "Served stale content while backend rebuilds cache"
             elif status == "MISS":
                 icon = "❌"
-                description = "Cache miss - request forwarded to backend"
-                impact = "High - full backend processing required"
+                description = "No cache entry found, forwarded to backend"
+            elif status == "EXPIRED":
+                icon = "🔄"
+                description = "Cache expired, no stale content available, backend building new entry"
             elif status == "DYNAMIC":
                 icon = "🔄"
-                description = "Dynamic content - bypasses cache entirely"
-                impact = "Expected - for dynamic/personalized content"
+                description = "Dynamic content, bypasses cache entirely"
             else:
                 icon = "❓"
-                description = f"Other cache status"
-                impact = "Unknown impact"
+                description = f"Other cache status: {status}"
             
             print(f"   {icon} {status}: {count:,} requests ({percentage:.1f}%)")
             print(f"      {description}")
-            print(f"      Success rate: {success_rate:.1f}% ({success_count:,}/{count:,})")
-            print(f"      Impact: {impact}")
-            
-            # Show operation breakdown if available
-            operations = status_data.get("operations", {})
-            if len(operations) > 1:
-                print(f"      Operations breakdown:")
-                for op_type, op_stats in operations.items():
-                    op_count = op_stats["total_requests"]
-                    op_success_rate = op_stats["success_rate"]
-                    print(f"        • {op_type}: {op_count:,} requests ({op_success_rate:.1f}% success)")
-            
             print()
-        
-        # Cache warming insights
-        print("🎯 CACHE WARMING INSIGHTS:")
-        
-        if cache_hit_rate < 50:
-            print("   🚨 Cache warming is working - many requests triggering backend cache building")
-            print("   📈 Expect cache hit rate to improve as cache warming continues")
-        elif cache_hit_rate > 80:
-            print("   ✅ Cache is well-warmed - most requests served from cache")
-            print("   🎯 Cache warming has been effective")
-        
-        # Backend load analysis
-        if stale_responses > 0:
-            stale_percentage = (stale_responses / total_requests) * 100
-            print(f"   ⚠️ {stale_percentage:.1f}% STALE responses indicate cache expiration")
-            print("   💡 Consider increasing cache TTL or cache warming frequency")
-        
-        if cache_misses > 0:
-            miss_percentage = (cache_misses / total_requests) * 100
-            print(f"   ❌ {miss_percentage:.1f}% MISS responses indicate new content or cache eviction")
-            print("   💡 These are opportunities for cache warming")
-        
-        # Time-based insights (if available)
-        earliest_time = None
-        latest_time = None
-        
-        for status_data in cf_stats.values():
-            if "first_seen" in status_data and status_data["first_seen"]:
-                try:
-                    first_time = datetime.fromisoformat(status_data["first_seen"].replace('Z', '+00:00'))
-                    if earliest_time is None or first_time < earliest_time:
-                        earliest_time = first_time
-                except Exception:
-                    pass
-            
-            if "last_seen" in status_data and status_data["last_seen"]:
-                try:
-                    last_time = datetime.fromisoformat(status_data["last_seen"].replace('Z', '+00:00'))
-                    if latest_time is None or last_time > latest_time:
-                        latest_time = last_time
-                except Exception:
-                    pass
-        
-        if earliest_time and latest_time:
-            duration = latest_time - earliest_time
-            print(f"   📅 Analysis period: {earliest_time.strftime('%Y-%m-%d %H:%M')} to {latest_time.strftime('%Y-%m-%d %H:%M')} UTC")
-            print(f"   ⏱️ Duration: {duration.days} days, {duration.seconds // 3600} hours")
-        
-        print()
-        
-        # Recommendations
-        print("🚀 CLOUDFLARE CACHE RECOMMENDATIONS:")
-        
-        if cache_hit_rate < 40:
-            print("   🚨 URGENT: Very low cache hit rate")
-            print("      • Continue aggressive cache warming")
-            print("      • Check if API supports proper cache headers")
-            print("      • Consider CloudFlare cache rules optimization")
-        
-        elif cache_hit_rate < 70:
-            print("   ⚠️ Cache performance can be improved:")
-            print("      • Continue regular cache warming")
-            print("      • Monitor cache warming effectiveness")
-            print("      • Consider warming more frequently")
-        
-        else:
-            print("   ✅ Good cache performance:")
-            print("      • Maintain current cache warming schedule")
-            print("      • Monitor for cache degradation")
-        
-        if stale_responses > cache_hits * 0.1:  # More than 10% of hits are stale
-            print("   ⚠️ High STALE response rate:")
-            print("      • Cache TTL might be too short")
-            print("      • Consider more frequent cache warming")
-            print("      • Check content update frequency")
-        
-        if backend_requests > total_requests * 0.5:  # More than 50% go to backend
-            print("   📈 High backend load detected:")
-            print("      • Cache warming is actively building cache")
-            print("      • Backend servers handling significant load")
-            print("      • Monitor server performance during cache warming")
-        
-        print("   💡 Share this analysis with infrastructure team to:")
-        print("      • Optimize CloudFlare cache settings")
-        print("      • Plan backend capacity for cache warming")
-        print("      • Validate cache warming effectiveness")
         
     except Exception as e:
         print(f"❌ Error analyzing CloudFlare cache data: {e}")
