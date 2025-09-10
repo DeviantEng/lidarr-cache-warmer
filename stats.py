@@ -267,7 +267,7 @@ def print_canary_analysis(storage) -> None:
         
         overall_success_rate = (total_successes / total_requests * 100) if total_requests > 0 else 0.0
         
-        print(f"🌍 OVERALL CANARY STATISTICS:")
+        print(f"🌐 OVERALL CANARY STATISTICS:")
         print(f"   Total requests across all targets: {total_requests:,}")
         print(f"   Total successful requests: {total_successes:,}")
         print(f"   Overall success rate: {overall_success_rate:.1f}%")
@@ -899,7 +899,7 @@ def print_stats_report(cfg: dict, show_canary_stats: bool = False):
     if cfg.get('artist_textsearch_transliterate_unicode', True):
         try:
             from unidecode import unidecode
-            print("🌍 UNICODE SUPPORT: Enabled (unidecode available)")
+            print("🌐 UNICODE SUPPORT: Enabled (unidecode available)")
             print("   International artists will be transliterated for better search results")
         except ImportError:
             print("⚠️ UNICODE SUPPORT: Enabled but unidecode missing!")
@@ -970,7 +970,6 @@ def print_stats_report(cfg: dict, show_canary_stats: bool = False):
     print("=" * 60)
 
 
-def main():
 def main():
     parser = argparse.ArgumentParser(
         description="Generate statistics report for Lidarr cache warmer"
