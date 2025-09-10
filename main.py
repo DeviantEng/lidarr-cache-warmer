@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import os
 import sys
@@ -559,68 +561,6 @@ def main():
                 force_count = sum(1 for mbid in text_search_to_check if cfg["force_text_search"])
                 pending_count = sum(1 for mbid in text_search_to_check 
                                    if mbid in artists_ledger and not artists_ledger[mbid].get("text_search_success", False))
-                stale_count = sum(1 for mbid in text_search_to_check 
-                                 if mbid in artists_ledger and 
-                                    artists_ledger[mbid].get("text_search_success", False) and
-                                    is_stale(artists_ledger[mbid].get("text_search_last_checked", ""), cfg["cache_recheck_hours"]))
-                
-                print(f"Will process {len(text_search_to_check)} artists for text search cache warming")
-                if force_count > 0:
-                    print(f"   - {force_count} forced re-checks")
-                if pending_count > 0:
-                    print(f"   - {pending_count} pending/failed text searches")
-                if stale_count > 0:
-                    print(f"   - {stale_count} stale text searches (older than {cfg['cache_recheck_hours']} hours)")
-                
-                text_search_results = process_text_search(text_search_to_check, artists_ledger, cfg, storage)
-                print(f"Text search warming complete: {text_search_results}")
-            else:
-                print("No artists to process for text search warming")
-                text_search_results = {"new_successes": 0, "new_failures": 0}
-                
-        except ImportError:
-            print("ERROR: process_artist_textsearch.py not found", file=sys.stderr)
-            sys.exit(2)
-        except Exception as e:
-            print(f"ERROR in text search processing: {e}", file=sys.stderr)
-            sys.exit(2)
-    else:
-        print("Artist text search processing disabled in config")
-        text_search_results = {"new_successes": 0, "new_failures": 0}
-
-    # Phase 3: Process Release Groups (if enabled)
-    if cfg["process_release_groups"]:
-        print(f"\n=== Phase 3: Release Group Cache Warming ===")
-        
-        # Re-read artists ledger to get updated statuses, then update RG artist statuses
-        artists_ledger = storage.read_artists_ledger()
-        
-        # Use efficient SQLite update if available, otherwise update in memory
-        if hasattr(storage, 'update_release_groups_artist_status'):
-            storage.update_release_groups_artist_status(artists_ledger)
-        else:
-            # Fallback for CSV storage
-            for rg_mbid, rg_data in rg_ledger.items():
-                artist_mbid = rg_data.get("artist_mbid", "")
-                if artist_mbid in artists_ledger:
-                    rg_data["artist_cache_status"] = artists_ledger[artist_mbid].get("status", "")
-            storage.write_release_groups_ledger(rg_ledger)
-        
-        try:
-            from process_releasegroups import process_release_groups
-            
-            # Filter RGs: only process those with successful artist cache AND pending RG status
-            rgs_to_check = [rg_mbid for rg_mbid, row in rg_ledger.items()
-                           if row.get("artist_cache_status", "").lower() == "success" and 
-                              (cfg["force_rg"] or 
-                               row.get("status", "").lower() not in ("success",) or
-                               is_stale(row.get("last_checked", ""), cfg["cache_recheck_hours"]))]
-            
-            if len(rgs_to_check) > 0:
-                # Show breakdown of release group reasons
-                force_count = sum(1 for rg_mbid in rgs_to_check if cfg["force_rg"])
-                pending_count = sum(1 for rg_mbid in rgs_to_check 
-                                   if rg_mbid in rg_ledger and rg_ledger[rg_mbid].get("status", "").lower() not in ("success",))
                 stale_count = sum(1 for rg_mbid in rgs_to_check 
                                  if rg_mbid in rg_ledger and 
                                     rg_ledger[rg_mbid].get("status", "").lower() == "success" and
@@ -709,4 +649,66 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()_count = sum(1 for mbid in text_search_to_check 
+                                 if mbid in artists_ledger and 
+                                    artists_ledger[mbid].get("text_search_success", False) and
+                                    is_stale(artists_ledger[mbid].get("text_search_last_checked", ""), cfg["cache_recheck_hours"]))
+                
+                print(f"Will process {len(text_search_to_check)} artists for text search cache warming")
+                if force_count > 0:
+                    print(f"   - {force_count} forced re-checks")
+                if pending_count > 0:
+                    print(f"   - {pending_count} pending/failed text searches")
+                if stale_count > 0:
+                    print(f"   - {stale_count} stale text searches (older than {cfg['cache_recheck_hours']} hours)")
+                
+                text_search_results = process_text_search(text_search_to_check, artists_ledger, cfg, storage)
+                print(f"Text search warming complete: {text_search_results}")
+            else:
+                print("No artists to process for text search warming")
+                text_search_results = {"new_successes": 0, "new_failures": 0}
+                
+        except ImportError:
+            print("ERROR: process_artist_textsearch.py not found", file=sys.stderr)
+            sys.exit(2)
+        except Exception as e:
+            print(f"ERROR in text search processing: {e}", file=sys.stderr)
+            sys.exit(2)
+    else:
+        print("Artist text search processing disabled in config")
+        text_search_results = {"new_successes": 0, "new_failures": 0}
+
+    # Phase 3: Process Release Groups (if enabled)
+    if cfg["process_release_groups"]:
+        print(f"\n=== Phase 3: Release Group Cache Warming ===")
+        
+        # Re-read artists ledger to get updated statuses, then update RG artist statuses
+        artists_ledger = storage.read_artists_ledger()
+        
+        # Use efficient SQLite update if available, otherwise update in memory
+        if hasattr(storage, 'update_release_groups_artist_status'):
+            storage.update_release_groups_artist_status(artists_ledger)
+        else:
+            # Fallback for CSV storage
+            for rg_mbid, rg_data in rg_ledger.items():
+                artist_mbid = rg_data.get("artist_mbid", "")
+                if artist_mbid in artists_ledger:
+                    rg_data["artist_cache_status"] = artists_ledger[artist_mbid].get("status", "")
+            storage.write_release_groups_ledger(rg_ledger)
+        
+        try:
+            from process_releasegroups import process_release_groups
+            
+            # Filter RGs: only process those with successful artist cache AND pending RG status
+            rgs_to_check = [rg_mbid for rg_mbid, row in rg_ledger.items()
+                           if row.get("artist_cache_status", "").lower() == "success" and 
+                              (cfg["force_rg"] or 
+                               row.get("status", "").lower() not in ("success",) or
+                               is_stale(row.get("last_checked", ""), cfg["cache_recheck_hours"]))]
+            
+            if len(rgs_to_check) > 0:
+                # Show breakdown of release group reasons
+                force_count = sum(1 for rg_mbid in rgs_to_check if cfg["force_rg"])
+                pending_count = sum(1 for rg_mbid in rgs_to_check 
+                                   if rg_mbid in rg_ledger and rg_ledger[rg_mbid].get("status", "").lower() not in ("success",))
+                stale
