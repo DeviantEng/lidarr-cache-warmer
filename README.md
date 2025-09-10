@@ -4,7 +4,7 @@ Cache warming tool for **Lidarr** metadata. Fetches artist and release group MBI
 
 **Multi-phase processing**: Warms artist MBID cache first, then artist text search cache, then release group cache (each phase optional and configurable).
 
-## 🕐 Cache Freshness Management
+## 🕒 Cache Freshness Management
 
 The cache warmer intelligently manages cache freshness to handle cache expiration:
 
@@ -264,6 +264,15 @@ python3 stats.py --config config.ini
 docker run --rm -v $(pwd)/data:/app/data --entrypoint python ghcr.io/devianteng/lidarr-cache-warmer:latest /app/stats.py --config /app/data/config.ini --canary-stats
 ```
 
+**CloudFlare Cache Performance Stats (requires using SQLite storage)**
+```bash
+# add --cf-cache-stats to the above calls; ex:
+docker run --rm -v $(pwd)/data:/app/data --entrypoint python ghcr.io/devianteng/lidarr-cache-warmer:latest /app/stats.py --config /app/data/config.ini --cf-cache-stats
+
+# Or combine both canary and CF cache analysis:
+docker run --rm -v $(pwd)/data:/app/data --entrypoint python ghcr.io/devianteng/lidarr-cache-warmer:latest /app/stats.py --config /app/data/config.ini --canary-stats --cf-cache-stats
+```
+
 **Example Output with Cache Freshness:**
 ```
 🎵 LIDARR CACHE WARMER - STATISTICS REPORT
@@ -284,13 +293,18 @@ docker run --rm -v $(pwd)/data:/app/data --entrypoint python ghcr.io/devianteng/
    ✅ Successfully cached: 8,247 (67.1%)
    ⏰ Stale cache entries: 125 (older than 72 hours)
 
+☁️ CLOUDFLARE CACHE EFFICIENCY:
+   ✅ Cache hits (HIT): 7,250 (75.2%)
+   🔄 Backend requests: 2,393 (24.8%)
+   🎯 Excellent cache performance!
+
 🚀 RECOMMENDATIONS:
    • Process 45 pending artists and 45 stale entries
    • Process 15 stale text searches
    • Process 125 stale release groups
 ```
 
-The statistics now show cache freshness information, helping you understand what needs refreshing.
+The statistics now show cache freshness information and CloudFlare cache performance, helping you understand what needs refreshing and how effectively your cache is performing.
 
 ---
 
@@ -348,10 +362,10 @@ a8c1eb9a-2fb4-4f4f-8ada-62f30e27a1af:
   - `artist_textsearch_lowercase = true` (matches Lidarr's case-insensitive search)
   - `artist_textsearch_transliterate_unicode = true` (converts international characters intelligently)
 - **⚡ Performance**: Removed unnecessary 30-second delay when Various Artists detected
-- **📝 Better Documentation**: Clearer configuration guidance for international music libraries
+- **📖 Better Documentation**: Clearer configuration guidance for international music libraries
 
 ### v1.7.0 Features
-- **🕐 Cache Freshness Management**: Automatic re-checking of successful entries after configurable hours
+- **🕒 Cache Freshness Management**: Automatic re-checking of successful entries after configurable hours
 - **📊 Staleness Statistics**: Statistics show which entries are due for refresh and when
 - **⚠️ Various Artists Protection**: Automatic detection and exclusion of Various Artists from processing
   - Detects Various Artists (MBID: `89ad4ac3-39f7-470e-963a-56509c546377`) which typically contains 100,000+ albums
@@ -363,7 +377,7 @@ a8c1eb9a-2fb4-4f4f-8ada-62f30e27a1af:
 ### v1.6.0 Features
 - **🔧 Path Resolution Fix**: Corrected double `/data/data/` path issues in Docker environments
 - **📊 Enhanced Stats**: Updated statistics display with connection settings and text processing options
-- **🌐 Better SSL Support**: Improved handling of `verify_ssl` and `lidarr_timeout` in stats collection
+- **🌍 Better SSL Support**: Improved handling of `verify_ssl` and `lidarr_timeout` in stats collection
 
 ### Migration Notes
 - **New Text Search Defaults**: Fresh installations now optimize for international music automatically

@@ -96,6 +96,7 @@ def inject_manual_artists(
                 "text_search_last_checked": "",
                 "manual_entry": True,  # Flag for tracking
                 "last_canary_target": "",  # Add canary tracking field
+                "last_cf_cache_status": "",  # Add CF cache status tracking field
             }
             new_count += 1
         else:
@@ -104,10 +105,12 @@ def inject_manual_artists(
                 artists_ledger[artist_mbid]["artist_name"] = artist_name
                 updated_count += 1
             
-            # Mark as manual entry and ensure canary field exists
+            # Mark as manual entry and ensure tracking fields exist
             artists_ledger[artist_mbid]["manual_entry"] = True
             if "last_canary_target" not in artists_ledger[artist_mbid]:
                 artists_ledger[artist_mbid]["last_canary_target"] = ""
+            if "last_cf_cache_status" not in artists_ledger[artist_mbid]:
+                artists_ledger[artist_mbid]["last_cf_cache_status"] = ""
     
     return new_count, updated_count
 
@@ -158,6 +161,7 @@ def inject_manual_release_groups(
                     "last_checked": "",
                     "manual_entry": True,  # Flag for tracking
                     "last_canary_target": "",  # Add canary tracking field
+                    "last_cf_cache_status": "",  # Add CF cache status tracking field
                 }
                 new_count += 1
             else:
@@ -168,11 +172,13 @@ def inject_manual_release_groups(
                     rg_ledger[rg_mbid]["artist_mbid"] = artist_mbid
                     updated_count += 1
                 
-                # Mark as manual entry, update artist cache status, and ensure canary field exists
+                # Mark as manual entry, update artist cache status, and ensure tracking fields exist
                 rg_ledger[rg_mbid]["manual_entry"] = True
                 rg_ledger[rg_mbid]["artist_cache_status"] = artists_ledger.get(artist_mbid, {}).get("status", "")
                 if "last_canary_target" not in rg_ledger[rg_mbid]:
                     rg_ledger[rg_mbid]["last_canary_target"] = ""
+                if "last_cf_cache_status" not in rg_ledger[rg_mbid]:
+                    rg_ledger[rg_mbid]["last_cf_cache_status"] = ""
     
     return new_count, updated_count
 

@@ -455,6 +455,250 @@ def print_canary_analysis(storage) -> None:
         print("   • Missing database tables (try running cache warmer once)")
 
 
+def print_cf_cache_analysis(storage) -> None:
+    """Print detailed CloudFlare cache status analysis"""
+    print()
+    print("=" * 60)
+    print("☁️ CLOUDFLARE CACHE STATUS ANALYSIS")
+    print("=" * 60)
+    
+    try:
+        cf_stats = storage.get_cf_cache_statistics()
+        
+        if not cf_stats:
+            print("📊 No CloudFlare cache status data available")
+            print("   This is normal for:")
+            print("   • CSV storage (limited CF cache tracking)")
+            print("   • Fresh installations")
+            print("   • APIs that don't set cf-cache-status header")
+            return
+        
+        # Handle different data structures between CSV and SQLite
+        if "basic_counts" in cf_stats:
+            # CSV storage - simplified data
+            basic_counts = cf_stats["basic_counts"]
+            total_responses = sum(basic_counts.values())
+            
+            if total_responses == 0:
+                print("📊 No CloudFlare cache status responses recorded")
+                return
+                
+            print(f"📊 Found {total_responses:,} responses with CF cache status (CSV summary)")
+            print()
+            
+            # Show basic distribution
+            print("☁️ CLOUDFLARE CACHE STATUS DISTRIBUTION:")
+            for status, count in sorted(basic_counts.items(), key=lambda x: x[1], reverse=True):
+                if count > 0:
+                    percentage = (count / total_responses) * 100
+                    
+                    # Add icons and descriptions
+                    if status == "HIT":
+                        icon = "✅"
+                        description = "(served from CloudFlare cache)"
+                    elif status == "STALE":
+                        icon = "⚠️"
+                        description = "(stale content, passed to backend)"
+                    elif status == "MISS":
+                        icon = "❌"
+                        description = "(not in cache, passed to backend)"
+                    elif status == "DYNAMIC":
+                        icon = "🔄"
+                        description = "(dynamic content, bypassed cache)"
+                    else:
+                        icon = "❓"
+                        description = f"(other status: {status})"
+                    
+                    print(f"   {icon} {status}: {count:,} responses ({percentage:.1f}%) {description}")
+            
+            return
+        
+        # SQLite storage - detailed data
+        total_requests = 0
+        total_cache_hits = 0
+        total_backend_requests = 0
+        
+        for status_data in cf_stats.values():
+            total_requests += status_data["total_requests"]
+        
+        if total_requests == 0:
+            print("📊 No CloudFlare cache status data available")
+            return
+        
+        print(f"📊 Found {len(cf_stats)} cache status types with {total_requests:,} total requests")
+        print()
+        
+        # Calculate cache efficiency metrics
+        cache_hits = cf_stats.get("HIT", {}).get("total_requests", 0)
+        stale_responses = cf_stats.get("STALE", {}).get("total_requests", 0)
+        cache_misses = cf_stats.get("MISS", {}).get("total_requests", 0)
+        dynamic_responses = cf_stats.get("DYNAMIC", {}).get("total_requests", 0)
+        
+        # Backend requests = STALE + MISS + DYNAMIC (anything not HIT)
+        backend_requests = total_requests - cache_hits
+        cache_hit_rate = (cache_hits / total_requests * 100) if total_requests > 0 else 0.0
+        backend_load_rate = (backend_requests / total_requests * 100) if total_requests > 0 else 0.0
+        
+        print(f"☁️ CLOUDFLARE CACHE EFFICIENCY:")
+        print(f"   Total API requests analyzed: {total_requests:,}")
+        print(f"   ✅ Cache hits (HIT): {cache_hits:,} ({cache_hit_rate:.1f}%)")
+        print(f"   🔄 Backend requests: {backend_requests:,} ({backend_load_rate:.1f}%)")
+        
+        if cache_hit_rate >= 80:
+            print(f"   🎯 Excellent cache performance!")
+        elif cache_hit_rate >= 60:
+            print(f"   👍 Good cache performance")
+        elif cache_hit_rate >= 40:
+            print(f"   ⚠️ Moderate cache performance")
+        else:
+            print(f"   🚨 Poor cache performance - high backend load")
+        
+        print()
+        
+        # Detailed breakdown
+        print("☁️ DETAILED CACHE STATUS BREAKDOWN:")
+        
+        # Sort by request count (highest first)
+        sorted_statuses = sorted(cf_stats.items(), key=lambda x: x[1]["total_requests"], reverse=True)
+        
+        for status, status_data in sorted_statuses:
+            count = status_data["total_requests"]
+            success_count = status_data["successful_requests"]
+            success_rate = status_data["success_rate"]
+            percentage = (count / total_requests) * 100
+            
+            # Add icons and descriptions
+            if status == "HIT":
+                icon = "✅"
+                description = "Served from CloudFlare cache (no backend load)"
+                impact = "Optimal - reduces backend server load"
+            elif status == "STALE":
+                icon = "⚠️"
+                description = "Stale content served while backend refreshes cache"
+                impact = "Medium - triggers backend refresh but serves stale content"
+            elif status == "MISS":
+                icon = "❌"
+                description = "Cache miss - request forwarded to backend"
+                impact = "High - full backend processing required"
+            elif status == "DYNAMIC":
+                icon = "🔄"
+                description = "Dynamic content - bypasses cache entirely"
+                impact = "Expected - for dynamic/personalized content"
+            else:
+                icon = "❓"
+                description = f"Other cache status"
+                impact = "Unknown impact"
+            
+            print(f"   {icon} {status}: {count:,} requests ({percentage:.1f}%)")
+            print(f"      {description}")
+            print(f"      Success rate: {success_rate:.1f}% ({success_count:,}/{count:,})")
+            print(f"      Impact: {impact}")
+            
+            # Show operation breakdown if available
+            operations = status_data.get("operations", {})
+            if len(operations) > 1:
+                print(f"      Operations breakdown:")
+                for op_type, op_stats in operations.items():
+                    op_count = op_stats["total_requests"]
+                    op_success_rate = op_stats["success_rate"]
+                    print(f"        • {op_type}: {op_count:,} requests ({op_success_rate:.1f}% success)")
+            
+            print()
+        
+        # Cache warming insights
+        print("🎯 CACHE WARMING INSIGHTS:")
+        
+        if cache_hit_rate < 50:
+            print("   🚨 Cache warming is working - many requests triggering backend cache building")
+            print("   📈 Expect cache hit rate to improve as cache warming continues")
+        elif cache_hit_rate > 80:
+            print("   ✅ Cache is well-warmed - most requests served from cache")
+            print("   🎯 Cache warming has been effective")
+        
+        # Backend load analysis
+        if stale_responses > 0:
+            stale_percentage = (stale_responses / total_requests) * 100
+            print(f"   ⚠️ {stale_percentage:.1f}% STALE responses indicate cache expiration")
+            print("   💡 Consider increasing cache TTL or cache warming frequency")
+        
+        if cache_misses > 0:
+            miss_percentage = (cache_misses / total_requests) * 100
+            print(f"   ❌ {miss_percentage:.1f}% MISS responses indicate new content or cache eviction")
+            print("   💡 These are opportunities for cache warming")
+        
+        # Time-based insights (if available)
+        earliest_time = None
+        latest_time = None
+        
+        for status_data in cf_stats.values():
+            if "first_seen" in status_data and status_data["first_seen"]:
+                try:
+                    first_time = datetime.fromisoformat(status_data["first_seen"].replace('Z', '+00:00'))
+                    if earliest_time is None or first_time < earliest_time:
+                        earliest_time = first_time
+                except Exception:
+                    pass
+            
+            if "last_seen" in status_data and status_data["last_seen"]:
+                try:
+                    last_time = datetime.fromisoformat(status_data["last_seen"].replace('Z', '+00:00'))
+                    if latest_time is None or last_time > latest_time:
+                        latest_time = last_time
+                except Exception:
+                    pass
+        
+        if earliest_time and latest_time:
+            duration = latest_time - earliest_time
+            print(f"   📅 Analysis period: {earliest_time.strftime('%Y-%m-%d %H:%M')} to {latest_time.strftime('%Y-%m-%d %H:%M')} UTC")
+            print(f"   ⏱️ Duration: {duration.days} days, {duration.seconds // 3600} hours")
+        
+        print()
+        
+        # Recommendations
+        print("🚀 CLOUDFLARE CACHE RECOMMENDATIONS:")
+        
+        if cache_hit_rate < 40:
+            print("   🚨 URGENT: Very low cache hit rate")
+            print("      • Continue aggressive cache warming")
+            print("      • Check if API supports proper cache headers")
+            print("      • Consider CloudFlare cache rules optimization")
+        
+        elif cache_hit_rate < 70:
+            print("   ⚠️ Cache performance can be improved:")
+            print("      • Continue regular cache warming")
+            print("      • Monitor cache warming effectiveness")
+            print("      • Consider warming more frequently")
+        
+        else:
+            print("   ✅ Good cache performance:")
+            print("      • Maintain current cache warming schedule")
+            print("      • Monitor for cache degradation")
+        
+        if stale_responses > cache_hits * 0.1:  # More than 10% of hits are stale
+            print("   ⚠️ High STALE response rate:")
+            print("      • Cache TTL might be too short")
+            print("      • Consider more frequent cache warming")
+            print("      • Check content update frequency")
+        
+        if backend_requests > total_requests * 0.5:  # More than 50% go to backend
+            print("   📈 High backend load detected:")
+            print("      • Cache warming is actively building cache")
+            print("      • Backend servers handling significant load")
+            print("      • Monitor server performance during cache warming")
+        
+        print("   💡 Share this analysis with infrastructure team to:")
+        print("      • Optimize CloudFlare cache settings")
+        print("      • Plan backend capacity for cache warming")
+        print("      • Validate cache warming effectiveness")
+        
+    except Exception as e:
+        print(f"❌ Error analyzing CloudFlare cache data: {e}")
+        print("   This might indicate:")
+        print("   • Corrupted CF cache tracking data")
+        print("   • Storage backend issues")
+        print("   • Missing database tables (try running cache warmer once)")
+
+
 def print_stats_report(cfg: dict, show_canary_stats: bool = False):
     """Generate and print comprehensive stats report"""
     
@@ -515,7 +759,7 @@ def print_stats_report(cfg: dict, show_canary_stats: bool = False):
             lidarr_rg_count = 0
             
     except Exception as e:
-        print(f"⚠️  WARNING: Could not fetch Lidarr data: {e}")
+        print(f"⚠️ WARNING: Could not fetch Lidarr data: {e}")
         print("    Using ledger data only...")
         lidarr_artist_count = len(artists_ledger)
         lidarr_rg_count = len(rg_ledger)
@@ -578,9 +822,9 @@ def print_stats_report(cfg: dict, show_canary_stats: bool = False):
             text_processing_options.append("symbol removal (deprecated)")
         
         if text_processing_options:
-            print(f"   ⚙️  Text processing: {', '.join(text_processing_options)}")
+            print(f"   ⚙️ Text processing: {', '.join(text_processing_options)}")
         else:
-            print(f"   ⚙️  Text processing: disabled (original names)")
+            print(f"   ⚙️ Text processing: disabled (original names)")
         
         print()
     else:
@@ -647,7 +891,7 @@ def print_stats_report(cfg: dict, show_canary_stats: bool = False):
     
     # Connection health check
     if not cfg.get("verify_ssl", True):
-        print("⚠️  SSL VERIFICATION: Disabled")
+        print("⚠️ SSL VERIFICATION: Disabled")
         print("   WARNING: Only use this in trusted private networks")
         print()
     
@@ -658,14 +902,14 @@ def print_stats_report(cfg: dict, show_canary_stats: bool = False):
             print("🌍 UNICODE SUPPORT: Enabled (unidecode available)")
             print("   International artists will be transliterated for better search results")
         except ImportError:
-            print("⚠️  UNICODE SUPPORT: Enabled but unidecode missing!")
+            print("⚠️ UNICODE SUPPORT: Enabled but unidecode missing!")
             print("   Install with: pip install unidecode")
             print("   Falling back to basic normalization (may not work well)")
         print()
     
     # Check for deprecated option usage
     if cfg.get('artist_textsearch_remove_symbols', False):
-        print("⚠️  DEPRECATED OPTION DETECTED:")
+        print("⚠️ DEPRECATED OPTION DETECTED:")
         print("   artist_textsearch_remove_symbols is deprecated and may damage non-Latin text")
         print("   Please update config.ini to use artist_textsearch_transliterate_unicode=true instead")
         print()
@@ -720,11 +964,13 @@ def print_stats_report(cfg: dict, show_canary_stats: bool = False):
     
     if not show_canary_stats and storage_type == "sqlite":
         print("   • Run with --canary-stats for detailed canary target breakdown")
+        print("   • Run with --cf-cache-stats for CloudFlare cache performance analysis")
     
     print()
     print("=" * 60)
 
 
+def main():
 def main():
     parser = argparse.ArgumentParser(
         description="Generate statistics report for Lidarr cache warmer"
@@ -732,6 +978,8 @@ def main():
     parser.add_argument("--config", required=True, help="Path to INI config (e.g., /data/config.ini)")
     parser.add_argument("--canary-stats", action="store_true", 
                         help="Include detailed canary response target analysis (requires SQLite storage)")
+    parser.add_argument("--cf-cache-stats", action="store_true",
+                        help="Include detailed CloudFlare cache status analysis (requires SQLite storage)")
     args = parser.parse_args()
 
     try:
@@ -748,9 +996,11 @@ def main():
             print(f"  - {issue}", file=sys.stderr)
         sys.exit(2)
 
-    # Warn about canary analysis limitations
-    if args.canary_stats and cfg.get("storage_type", "csv").lower() != "sqlite":
-        print("⚠️  WARNING: --canary-stats with CSV storage provides very limited data!", file=sys.stderr)
+    # Warn about analysis limitations
+    storage_type = cfg.get("storage_type", "csv").lower()
+    
+    if args.canary_stats and storage_type != "sqlite":
+        print("⚠️ WARNING: --canary-stats with CSV storage provides very limited data!", file=sys.stderr)
         print("", file=sys.stderr)
         print("   CSV storage only shows current canary targets from ledger entries.", file=sys.stderr)
         print("   You will NOT get:", file=sys.stderr)
@@ -767,7 +1017,34 @@ def main():
         print("   Continuing with limited CSV analysis...", file=sys.stderr)
         print("=" * 60, file=sys.stderr)
 
+    if args.cf_cache_stats and storage_type != "sqlite":
+        print("⚠️ WARNING: --cf-cache-stats with CSV storage provides very limited data!", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("   CSV storage only shows current CF cache status from ledger entries.", file=sys.stderr)
+        print("   You will NOT get:", file=sys.stderr)
+        print("   • Cache hit rate analysis over time", file=sys.stderr)
+        print("   • Historical cache performance tracking", file=sys.stderr)
+        print("   • Backend load impact analysis", file=sys.stderr)
+        print("   • Detailed operation breakdowns", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("   For full CF cache analysis, switch to SQLite storage:", file=sys.stderr)
+        print("   1. Update config.ini: storage_type = sqlite", file=sys.stderr)
+        print("   2. Run cache warmer to start collecting detailed data", file=sys.stderr)
+        print("   3. Re-run stats with --cf-cache-stats for full breakdown", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("   Continuing with limited CSV analysis...", file=sys.stderr)
+        print("=" * 60, file=sys.stderr)
+
     print_stats_report(cfg, args.canary_stats)
+    
+    # Show CF cache analysis if requested
+    if args.cf_cache_stats:
+        # Create storage backend to access CF cache data
+        try:
+            storage = create_storage_backend(cfg)
+            print_cf_cache_analysis(storage)
+        except Exception as e:
+            print(f"❌ Error accessing storage for CF cache analysis: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":
