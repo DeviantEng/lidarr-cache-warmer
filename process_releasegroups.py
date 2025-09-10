@@ -152,10 +152,15 @@ async def check_release_group_with_cache_warming(
     max_attempts: int = 15,
     delay_between_attempts: float = 0.5,
     timeout: int = 10
-) -> Tuple[str, str, int, float]:
-    """Check single release group MBID with cache warming - keep trying until success or max attempts"""
+) -> Tuple[str, str, int, float, str, str]:
+    """Check single release group MBID with cache warming - keep trying until success or max attempts.
+    
+    Returns: (status, last_code, attempts_used, total_response_time, canary_target, cf_cache_status)
+    """
     url = f"{target_base_url.rstrip('/')}/album/{rg_mbid}"
     total_response_time = 0
+    canary_target = ""
+    cf_cache_status = ""
     
     for attempt in range(max_attempts):
         start_time = time.time()
@@ -165,9 +170,15 @@ async def check_release_group_with_cache_warming(
                 total_response_time += response_time
                 status_code = resp.status
                 
+                # Capture canary target header
+                canary_target = resp.headers.get("x-canary-response-target", "")
+                
+                # Capture CloudFlare cache status header
+                cf_cache_status = resp.headers.get("cf-cache-status", "")
+                
                 if status_code == 200:
                     # SUCCESS! Cache warming worked
-                    return "success", str(status_code), attempt + 1, total_response_time
+                    return "success", str(status_code), attempt + 1, total_response_time, canary_target, cf_cache_status
                 
                 # For cache warming, we retry ALL non-200 responses
                 # (503, 404, 429, etc. - keep trying until cache warms up)
@@ -187,7 +198,7 @@ async def check_release_group_with_cache_warming(
             await asyncio.sleep(delay_between_attempts)
     
     # Exhausted all attempts without success
-    return "timeout", str(status_code), max_attempts, total_response_time
+    return "timeout", str(status_code), max_attempts, total_response_time, canary_target, cf_cache_status
 
 
 async def check_release_groups_concurrent_with_timing(
@@ -240,7 +251,7 @@ async def check_release_groups_concurrent_with_timing(
             print(f"[{global_position}/{total_to_process}] Checking {artist_name} - {rg_title} [{rg_mbid}] ...", end="", flush=True)
             
             try:
-                status, last_code, attempts_used, response_time = await check_release_group_with_cache_warming(
+                status, last_code, attempts_used, response_time, canary_target, cf_cache_status = await check_release_group_with_cache_warming(
                     session,
                     rg_mbid,
                     cfg["target_base_url"],
@@ -251,25 +262,53 @@ async def check_release_groups_concurrent_with_timing(
                 
                 rate_limiter.release(int(last_code) if last_code.isdigit() else last_code, response_time)
                 
-                # Update ledger
+                # Update ledger with canary target and CF cache status
                 ledger[rg_mbid].update({
                     "status": status,
                     "attempts": attempts_used,
                     "last_status_code": last_code,
-                    "last_checked": iso_now()
+                    "last_checked": iso_now(),
+                    "last_canary_target": canary_target,
+                    "last_cf_cache_status": cf_cache_status
                 })
+                
+                # Record canary response in SQLite for analytics (if available)
+                if hasattr(storage, 'record_canary_response') and canary_target:
+                    storage.record_canary_response(
+                        entity_type="release_group",
+                        entity_id=rg_mbid,
+                        canary_target=canary_target,
+                        status_code=last_code,
+                        success=(status == "success"),
+                        operation_type="release_group"
+                    )
+                
+                # Record CF cache response in SQLite for analytics (if available)
+                if hasattr(storage, 'record_cf_cache_response') and cf_cache_status:
+                    storage.record_cf_cache_response(
+                        entity_type="release_group",
+                        entity_id=rg_mbid,
+                        cf_cache_status=cf_cache_status,
+                        status_code=last_code,
+                        success=(status == "success"),
+                        operation_type="release_group"
+                    )
                 
                 # Count results and display with colors
                 if status == "success":
                     new_successes += 1
                     batch_successes += 1
                     success_text = Colors.success("SUCCESS", colored_output)
-                    print(f" {success_text} (code={last_code}, attempts={attempts_used})")
+                    canary_info = f" (canary: {canary_target})" if canary_target else ""
+                    cf_cache_info = f" (cf-cache: {cf_cache_status})" if cf_cache_status else ""
+                    print(f" {success_text} (code={last_code}, attempts={attempts_used}){canary_info}{cf_cache_info}")
                 else:
                     new_failures += 1
                     batch_timeouts += 1
                     timeout_text = Colors.error("TIMEOUT", colored_output)
-                    print(f" {timeout_text} (code={last_code}, attempts={attempts_used})")
+                    canary_info = f" (canary: {canary_target})" if canary_target else ""
+                    cf_cache_info = f" (cf-cache: {cf_cache_status})" if cf_cache_status else ""
+                    print(f" {timeout_text} (code={last_code}, attempts={attempts_used}){canary_info}{cf_cache_info}")
                 
                 # Note: Release groups don't typically trigger Lidarr refreshes
                 # But if needed, we could implement that here similar to artists
@@ -282,8 +321,32 @@ async def check_release_groups_concurrent_with_timing(
                     "status": "timeout",
                     "attempts": cfg["max_attempts_per_rg"],
                     "last_status_code": f"EXC:{type(e).__name__}",
-                    "last_checked": iso_now()
+                    "last_checked": iso_now(),
+                    "last_canary_target": "",
+                    "last_cf_cache_status": ""
                 })
+                
+                # Record exception in canary analytics if storage supports it
+                if hasattr(storage, 'record_canary_response'):
+                    storage.record_canary_response(
+                        entity_type="release_group",
+                        entity_id=rg_mbid,
+                        canary_target="",
+                        status_code=f"EXC:{type(e).__name__}",
+                        success=False,
+                        operation_type="release_group"
+                    )
+                
+                # Record exception in CF cache analytics if storage supports it
+                if hasattr(storage, 'record_cf_cache_response'):
+                    storage.record_cf_cache_response(
+                        entity_type="release_group",
+                        entity_id=rg_mbid,
+                        cf_cache_status="",
+                        status_code=f"EXC:{type(e).__name__}",
+                        success=False,
+                        operation_type="release_group"
+                    )
                 
                 new_failures += 1
                 batch_timeouts += 1

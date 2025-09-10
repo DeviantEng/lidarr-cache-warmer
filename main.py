@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import os
 import sys
@@ -394,10 +396,14 @@ def main():
                 "attempts": 0,
                 "last_status_code": "",
                 "last_checked": "",
-                # New text search fields
+                # Text search fields
                 "text_search_attempted": False,
                 "text_search_success": False,
                 "text_search_last_checked": "",
+                # Canary target field
+                "last_canary_target": "",
+                # CF cache status field
+                "last_cf_cache_status": "",
             }
             artists_new_count += 1
         else:
@@ -410,6 +416,14 @@ def main():
                 artists_ledger[mbid]["text_search_attempted"] = False
                 artists_ledger[mbid]["text_search_success"] = False
                 artists_ledger[mbid]["text_search_last_checked"] = ""
+            
+            # Add canary target field if missing (for existing records)
+            if "last_canary_target" not in artists_ledger[mbid]:
+                artists_ledger[mbid]["last_canary_target"] = ""
+            
+            # Add CF cache status field if missing (for existing records)
+            if "last_cf_cache_status" not in artists_ledger[mbid]:
+                artists_ledger[mbid]["last_cf_cache_status"] = ""
 
     # Update release groups ledger with current Lidarr data
     rg_new_count = 0
@@ -427,6 +441,10 @@ def main():
                     "attempts": 0,
                     "last_status_code": "",
                     "last_checked": "",
+                    # Canary target field
+                    "last_canary_target": "",
+                    # CF cache status field
+                    "last_cf_cache_status": "",
                 }
                 rg_new_count += 1
             else:
@@ -434,6 +452,14 @@ def main():
                 rg_ledger[rg_mbid]["rg_title"] = rg["rg_title"]
                 rg_ledger[rg_mbid]["artist_name"] = rg["artist_name"]
                 rg_ledger[rg_mbid]["artist_cache_status"] = artists_ledger.get(rg["artist_mbid"], {}).get("status", "")
+                
+                # Add canary target field if missing (for existing records)
+                if "last_canary_target" not in rg_ledger[rg_mbid]:
+                    rg_ledger[rg_mbid]["last_canary_target"] = ""
+                
+                # Add CF cache status field if missing (for existing records)
+                if "last_cf_cache_status" not in rg_ledger[rg_mbid]:
+                    rg_ledger[rg_mbid]["last_cf_cache_status"] = ""
 
     # Write updated ledgers using storage backend
     storage.write_artists_ledger(artists_ledger)
@@ -599,6 +625,9 @@ def main():
         if hasattr(storage, 'update_release_groups_artist_status'):
             storage.update_release_groups_artist_status(artists_ledger)
         else:
+            # Fallback for CSV storage
+            for rg_mbid, rg_data in rg_ledger.items():
+                artist_mbid = rg_data.get("artist_mbid", "")
             # Fallback for CSV storage
             for rg_mbid, rg_data in rg_ledger.items():
                 artist_mbid = rg_data.get("artist_mbid", "")

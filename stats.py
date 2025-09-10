@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import sqlite3
 import sys
 from datetime import datetime, timezone
 from typing import Dict
@@ -234,7 +235,490 @@ def format_config_summary(cfg: dict) -> str:
     return "\n".join(config_lines)
 
 
-def print_stats_report(cfg: dict):
+def print_canary_analysis(storage) -> None:
+    """Print detailed canary response target analysis"""
+    print()
+    print("=" * 60)
+    print("🎯 CANARY RESPONSE TARGET ANALYSIS")
+    print("=" * 60)
+    
+    try:
+        canary_stats = storage.get_canary_statistics()
+        
+        if not canary_stats:
+            print("📊 No canary response data available")
+            print("   This is normal for:")
+            print("   • CSV storage (limited canary tracking)")
+            print("   • Fresh installations")
+            print("   • APIs that don't set x-canary-response-target header")
+            return
+        
+        print(f"📊 Found {len(canary_stats)} canary targets with response data")
+        print()
+        
+        # Calculate overall statistics
+        total_requests = 0
+        total_successes = 0
+        
+        for target_name, target_data in canary_stats.items():
+            for op_type, op_stats in target_data.get("operations", {}).items():
+                total_requests += op_stats["total_requests"]
+                total_successes += op_stats["successful_requests"]
+        
+        overall_success_rate = (total_successes / total_requests * 100) if total_requests > 0 else 0.0
+        
+        print(f"🌐 OVERALL CANARY STATISTICS:")
+        print(f"   Total requests across all targets: {total_requests:,}")
+        print(f"   Total successful requests: {total_successes:,}")
+        print(f"   Overall success rate: {overall_success_rate:.1f}%")
+        
+        # Show failure breakdown if there are any failures
+        total_failures = total_requests - total_successes
+        if total_failures > 0:
+            print(f"   Total failed requests: {total_failures:,}")
+            
+            # Get failure breakdown by status code (only works with SQLite storage)
+            if hasattr(storage, 'db_path') and os.path.exists(storage.db_path):
+                try:
+                    with sqlite3.connect(storage.db_path) as conn:
+                        conn.row_factory = sqlite3.Row
+                        cursor = conn.execute("""
+                            SELECT status_code, COUNT(*) as count
+                            FROM canary_responses 
+                            WHERE success = 0 AND canary_target != ''
+                            GROUP BY status_code
+                            ORDER BY count DESC
+                        """)
+                        
+                        failure_codes = cursor.fetchall()
+                        if failure_codes:
+                            print(f"   Failure breakdown:")
+                            for row in failure_codes:
+                                status_code = row["status_code"]
+                                count = row["count"]
+                                
+                                # Add description for common status codes
+                                if status_code == "429":
+                                    description = "(rate limited)"
+                                elif status_code == "503":
+                                    description = "(service unavailable)"
+                                elif status_code == "404":
+                                    description = "(not found)"
+                                elif status_code == "500":
+                                    description = "(server error)"
+                                elif status_code.startswith("EXC:"):
+                                    description = "(connection exception)"
+                                elif status_code == "TIMEOUT":
+                                    description = "(request timeout)"
+                                else:
+                                    description = ""
+                                
+                                print(f"     • {count} × HTTP {status_code} {description}")
+                except Exception as e:
+                    print(f"   (Could not retrieve failure breakdown: {e})")
+        
+        print()
+        
+        # Show successful request distribution between targets
+        if total_successes > 0:
+            print(f"📊 SUCCESSFUL REQUEST DISTRIBUTION:")
+            success_distribution = []
+            for target_name, target_data in canary_stats.items():
+                target_successes = 0
+                for op_stats in target_data.get("operations", {}).values():
+                    target_successes += op_stats["successful_requests"]
+                
+                if target_successes > 0:
+                    success_percentage = (target_successes / total_successes * 100)
+                    success_distribution.append({
+                        "name": target_name,
+                        "successes": target_successes,
+                        "percentage": success_percentage
+                    })
+            
+            # Sort by success count (highest first)
+            success_distribution.sort(key=lambda x: x["successes"], reverse=True)
+            
+            for dist in success_distribution:
+                print(f"   {dist['name']}: {dist['successes']:,} successful requests ({dist['percentage']:.1f}%)")
+            print()
+        
+        # Sort targets by success rate (lowest first to highlight problems)
+        sorted_targets = []
+        for target_name, target_data in canary_stats.items():
+            target_total_requests = 0
+            target_total_successes = 0
+            
+            for op_stats in target_data.get("operations", {}).values():
+                target_total_requests += op_stats["total_requests"]
+                target_total_successes += op_stats["successful_requests"]
+            
+            target_success_rate = (target_total_successes / target_total_requests * 100) if target_total_requests > 0 else 0.0
+            
+            sorted_targets.append({
+                "name": target_name,
+                "success_rate": target_success_rate,
+                "total_requests": target_total_requests,
+                "total_successes": target_total_successes,
+                "data": target_data
+            })
+        
+        # Sort by success rate (lowest first)
+        sorted_targets.sort(key=lambda x: x["success_rate"])
+        
+        print("🎯 CANARY TARGET BREAKDOWN (sorted by success rate):")
+        print()
+        
+        for target in sorted_targets:
+            target_name = target["name"]
+            target_success_rate = target["success_rate"]
+            target_requests = target["total_requests"]
+            target_data = target["data"]
+            
+            # Color code based on success rate
+            if target_success_rate >= 95:
+                status_icon = "✅"
+            elif target_success_rate >= 80:
+                status_icon = "⚠️ "
+            else:
+                status_icon = "❌"
+            
+            print(f"{status_icon} {target_name}")
+            print(f"   Overall: {target_success_rate:.1f}% success ({target["total_successes"]:,}/{target_requests:,} requests)")
+            
+            # Show first/last seen if available
+            if "first_seen" in target_data and "last_seen" in target_data:
+                try:
+                    first_seen = datetime.fromisoformat(target_data["first_seen"].replace('Z', '+00:00'))
+                    last_seen = datetime.fromisoformat(target_data["last_seen"].replace('Z', '+00:00'))
+                    print(f"   Active: {first_seen.strftime('%Y-%m-%d %H:%M')} to {last_seen.strftime('%Y-%m-%d %H:%M')} UTC")
+                except Exception:
+                    pass
+            
+            # Break down by operation type
+            operations = target_data.get("operations", {})
+            if len(operations) > 1:
+                print(f"   Operations breakdown:")
+                for op_type, op_stats in operations.items():
+                    op_success_rate = op_stats["success_rate"]
+                    op_requests = op_stats["total_requests"]
+                    op_successes = op_stats["successful_requests"]
+                    
+                    # Color code operation success rate
+                    if op_success_rate >= 95:
+                        op_icon = "  ✅"
+                    elif op_success_rate >= 80:
+                        op_icon = "  ⚠️ "
+                    else:
+                        op_icon = "  ❌"
+                    
+                    print(f"{op_icon} {op_type}: {op_success_rate:.1f}% ({op_successes:,}/{op_requests:,})")
+            
+            print()
+        
+        # Recommendations
+        print("🚀 CANARY ANALYSIS RECOMMENDATIONS:")
+        
+        problem_targets = [t for t in sorted_targets if t["success_rate"] < 80]
+        warning_targets = [t for t in sorted_targets if 80 <= t["success_rate"] < 95]
+        
+        if problem_targets:
+            print(f"   ❌ {len(problem_targets)} target(s) with concerning success rates (<80%):")
+            for target in problem_targets[:3]:  # Show top 3 worst
+                print(f"      • {target['name']}: {target['success_rate']:.1f}% success")
+            if len(problem_targets) > 3:
+                print(f"      • ... and {len(problem_targets) - 3} more")
+        
+        if warning_targets:
+            print(f"   ⚠️  {len(warning_targets)} target(s) with moderate success rates (80-95%):")
+            for target in warning_targets[:2]:  # Show top 2
+                print(f"      • {target['name']}: {target['success_rate']:.1f}% success")
+            if len(warning_targets) > 2:
+                print(f"      • ... and {len(warning_targets) - 2} more")
+        
+        good_targets = [t for t in sorted_targets if t["success_rate"] >= 95]
+        if good_targets:
+            print(f"   ✅ {len(good_targets)} target(s) performing well (≥95% success rate)")
+        
+        if problem_targets or warning_targets:
+            print()
+            print("   💡 Share this analysis with the API maintainers to help identify:")
+            print("      • Problematic canary deployments")
+            print("      • Performance differences between API versions")
+            print("      • Deployment rollback candidates")
+        
+    except Exception as e:
+        print(f"❌ Error analyzing canary data: {e}")
+        print("   This might indicate:")
+        print("   • Corrupted canary tracking data")
+        print("   • Storage backend issues")
+        print("   • Missing database tables (try running cache warmer once)")
+
+
+def print_cf_cache_analysis(storage) -> None:
+    """Print detailed CloudFlare cache status analysis"""
+    print()
+    print("=" * 60)
+    print("☁️ CLOUDFLARE CACHE STATUS ANALYSIS")
+    print("=" * 60)
+    
+    try:
+        cf_stats = storage.get_cf_cache_statistics()
+        
+        if not cf_stats:
+            print("📊 No CloudFlare cache status data available")
+            print("   This is normal for:")
+            print("   • CSV storage (limited CF cache tracking)")
+            print("   • Fresh installations")
+            print("   • APIs that don't set cf-cache-status header")
+            return
+        
+        # Handle different data structures between CSV and SQLite
+        if "basic_counts" in cf_stats:
+            # CSV storage - simplified data
+            basic_counts = cf_stats["basic_counts"]
+            total_responses = sum(basic_counts.values())
+            
+            if total_responses == 0:
+                print("📊 No CloudFlare cache status responses recorded")
+                return
+                
+            print(f"📊 Found {total_responses:,} responses with CF cache status (CSV summary)")
+            print()
+            
+            # Show basic distribution
+            print("☁️ CLOUDFLARE CACHE STATUS DISTRIBUTION:")
+            for status, count in sorted(basic_counts.items(), key=lambda x: x[1], reverse=True):
+                if count > 0:
+                    percentage = (count / total_responses) * 100
+                    
+                    # Add icons and descriptions
+                    if status == "HIT":
+                        icon = "✅"
+                        description = "(served from CloudFlare cache)"
+                    elif status == "STALE":
+                        icon = "⚠️"
+                        description = "(stale content, passed to backend)"
+                    elif status == "MISS":
+                        icon = "❌"
+                        description = "(not in cache, passed to backend)"
+                    elif status == "DYNAMIC":
+                        icon = "🔄"
+                        description = "(dynamic content, bypassed cache)"
+                    else:
+                        icon = "❓"
+                        description = f"(other status: {status})"
+                    
+                    print(f"   {icon} {status}: {count:,} responses ({percentage:.1f}%) {description}")
+            
+            return
+        
+        # SQLite storage - detailed data
+        total_requests = 0
+        total_cache_hits = 0
+        total_backend_requests = 0
+        
+        for status_data in cf_stats.values():
+            total_requests += status_data["total_requests"]
+        
+        if total_requests == 0:
+            print("📊 No CloudFlare cache status data available")
+            return
+        
+        print(f"📊 Found {len(cf_stats)} cache status types with {total_requests:,} total requests")
+        print()
+        
+        # Calculate cache efficiency metrics
+        cache_hits = cf_stats.get("HIT", {}).get("total_requests", 0)
+        stale_responses = cf_stats.get("STALE", {}).get("total_requests", 0)
+        cache_misses = cf_stats.get("MISS", {}).get("total_requests", 0)
+        dynamic_responses = cf_stats.get("DYNAMIC", {}).get("total_requests", 0)
+        
+        # Backend requests = STALE + MISS + DYNAMIC (anything not HIT)
+        backend_requests = total_requests - cache_hits
+        cache_hit_rate = (cache_hits / total_requests * 100) if total_requests > 0 else 0.0
+        backend_load_rate = (backend_requests / total_requests * 100) if total_requests > 0 else 0.0
+        
+        print(f"☁️ CLOUDFLARE CACHE EFFICIENCY:")
+        print(f"   Total API requests analyzed: {total_requests:,}")
+        print(f"   ✅ Cache hits (HIT): {cache_hits:,} ({cache_hit_rate:.1f}%)")
+        print(f"   🔄 Backend requests: {backend_requests:,} ({backend_load_rate:.1f}%)")
+        
+        if cache_hit_rate >= 80:
+            print(f"   🎯 Excellent cache performance!")
+        elif cache_hit_rate >= 60:
+            print(f"   👍 Good cache performance")
+        elif cache_hit_rate >= 40:
+            print(f"   ⚠️ Moderate cache performance")
+        else:
+            print(f"   🚨 Poor cache performance - high backend load")
+        
+        print()
+        
+        # Get cross-tabulation data from SQLite if available
+        cross_tab_data = {}
+        
+        if hasattr(storage, 'db_path') and os.path.exists(storage.db_path):
+            try:
+                with sqlite3.connect(storage.db_path) as conn:
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.execute("""
+                        SELECT 
+                            cf_cache_status,
+                            status_code,
+                            success,
+                            COUNT(*) as count
+                        FROM cf_cache_responses 
+                        WHERE cf_cache_status != ''
+                        GROUP BY cf_cache_status, status_code, success
+                        ORDER BY cf_cache_status, status_code
+                    """)
+                    
+                    for row in cursor:
+                        cf_status = row["cf_cache_status"]
+                        status_code = row["status_code"]
+                        success = bool(row["success"])
+                        count = row["count"]
+                        
+                        if cf_status not in cross_tab_data:
+                            cross_tab_data[cf_status] = {}
+                        
+                        outcome = "SUCCESS" if success else "TIMEOUT"
+                        key = f"{status_code} {outcome}"
+                        cross_tab_data[cf_status][key] = count
+                        
+            except Exception as e:
+                print(f"   (Could not retrieve detailed cross-tabulation: {e})")
+        
+        # Calculate true cache effectiveness
+        true_cache_hits = cache_hits  # HIT responses
+        successful_stale = 0
+        backend_contacted = total_requests - cache_hits
+        
+        if "STALE" in cf_stats:
+            successful_stale = cf_stats["STALE"]["successful_requests"]
+        
+        true_cache_effectiveness = ((true_cache_hits + successful_stale) / total_requests * 100) if total_requests > 0 else 0.0
+        
+        print("📋 CACHE EFFECTIVENESS SUMMARY:")
+        print(f"   ✅ Effective cache responses: {true_cache_hits + successful_stale:,} ({true_cache_effectiveness:.1f}%)")
+        print(f"      • True cache hits (HIT): {true_cache_hits:,}")
+        print(f"      • Successful stale refresh: {successful_stale:,}")
+        print(f"   🔄 Backend contacted: {backend_contacted:,} ({(backend_contacted/total_requests*100):.1f}%)")
+        
+        if true_cache_effectiveness >= 70:
+            print(f"   🎯 Excellent cache performance!")
+        elif true_cache_effectiveness >= 40:
+            print(f"   👍 Good cache performance")
+        else:
+            print(f"   ⚡ Cache warming actively building cache")
+        
+        print()
+        
+        # Cross-tabulation breakdown
+        if cross_tab_data:
+            print("☁️ CACHE STATUS vs BACKEND RESPONSE:")
+            print()
+            
+            # Define status order and icons
+            status_order = ["HIT", "STALE", "MISS", "EXPIRED", "DYNAMIC"]
+            status_info = {
+                "HIT": {"icon": "✅", "desc": "served from CF cache"},
+                "STALE": {"icon": "⚠️", "desc": "CF had stale content, contacted backend"},
+                "MISS": {"icon": "❌", "desc": "no CF cache, forwarded to backend"},
+                "EXPIRED": {"icon": "🔄", "desc": "cache expired, no stale available"},
+                "DYNAMIC": {"icon": "🔄", "desc": "dynamic content, bypassed cache"}
+            }
+            
+            for cf_status in status_order:
+                if cf_status not in cross_tab_data:
+                    continue
+                    
+                info = status_info.get(cf_status, {"icon": "❓", "desc": f"other status: {cf_status}"})
+                total_for_status = sum(cross_tab_data[cf_status].values())
+                percentage = (total_for_status / total_requests * 100)
+                
+                print(f"{info['icon']} {cf_status} ({info['desc']}):")
+                print(f"   Total: {total_for_status:,} requests ({percentage:.1f}%)")
+                
+                # Sort by count (descending)
+                sorted_outcomes = sorted(cross_tab_data[cf_status].items(), key=lambda x: x[1], reverse=True)
+                
+                for outcome, count in sorted_outcomes:
+                    outcome_percentage = (count / total_for_status * 100) if total_for_status > 0 else 0
+                    
+                    # Parse outcome
+                    if "SUCCESS" in outcome:
+                        outcome_icon = "✅"
+                    else:
+                        outcome_icon = "❌"
+                    
+                    print(f"   {outcome_icon} {outcome}: {count:,} requests ({outcome_percentage:.1f}%)")
+                
+                print()
+            
+            # Show any remaining statuses not in our predefined list
+            for cf_status in cross_tab_data:
+                if cf_status not in status_order:
+                    total_for_status = sum(cross_tab_data[cf_status].values())
+                    percentage = (total_for_status / total_requests * 100)
+                    
+                    print(f"❓ {cf_status} (other cache status):")
+                    print(f"   Total: {total_for_status:,} requests ({percentage:.1f}%)")
+                    
+                    sorted_outcomes = sorted(cross_tab_data[cf_status].items(), key=lambda x: x[1], reverse=True)
+                    for outcome, count in sorted_outcomes:
+                        outcome_percentage = (count / total_for_status * 100) if total_for_status > 0 else 0
+                        outcome_icon = "✅" if "SUCCESS" in outcome else "❌"
+                        print(f"   {outcome_icon} {outcome}: {count:,} requests ({outcome_percentage:.1f}%)")
+                    print()
+        
+        else:
+            # Fallback to simple breakdown if cross-tabulation not available
+            print("☁️ CACHE STATUS BREAKDOWN:")
+            print("   (Cross-tabulation requires SQLite storage with detailed tracking)")
+            print()
+            
+            # Sort by request count (highest first)
+            sorted_statuses = sorted(cf_stats.items(), key=lambda x: x[1]["total_requests"], reverse=True)
+            
+            for status, status_data in sorted_statuses:
+                count = status_data["total_requests"]
+                percentage = (count / total_requests) * 100
+                
+                # Add icons and descriptions
+                if status == "HIT":
+                    icon = "✅"
+                    description = "Served directly from CloudFlare cache"
+                elif status == "STALE":
+                    icon = "⚠️"
+                    description = "Served stale content while backend rebuilds cache"
+                elif status == "MISS":
+                    icon = "❌"
+                    description = "No cache entry found, forwarded to backend"
+                elif status == "EXPIRED":
+                    icon = "🔄"
+                    description = "Cache expired, no stale content available, backend building new entry"
+                elif status == "DYNAMIC":
+                    icon = "🔄"
+                    description = "Dynamic content, bypasses cache entirely"
+                else:
+                    icon = "❓"
+                    description = f"Other cache status: {status}"
+                
+                print(f"   {icon} {status}: {count:,} requests ({percentage:.1f}%)")
+                print(f"      {description}")
+                print()
+        
+    except Exception as e:
+        print(f"❌ Error analyzing CloudFlare cache data: {e}")
+        print("   This might indicate:")
+        print("   • Corrupted CF cache tracking data")
+        print("   • Storage backend issues")
+        print("   • Missing database tables (try running cache warmer once)")
+
+
+def print_stats_report(cfg: dict, show_canary_stats: bool = False):
     """Generate and print comprehensive stats report"""
     
     print("=" * 60)
@@ -294,7 +778,7 @@ def print_stats_report(cfg: dict):
             lidarr_rg_count = 0
             
     except Exception as e:
-        print(f"⚠️  WARNING: Could not fetch Lidarr data: {e}")
+        print(f"⚠️ WARNING: Could not fetch Lidarr data: {e}")
         print("    Using ledger data only...")
         lidarr_artist_count = len(artists_ledger)
         lidarr_rg_count = len(rg_ledger)
@@ -357,9 +841,9 @@ def print_stats_report(cfg: dict):
             text_processing_options.append("symbol removal (deprecated)")
         
         if text_processing_options:
-            print(f"   ⚙️  Text processing: {', '.join(text_processing_options)}")
+            print(f"   ⚙️ Text processing: {', '.join(text_processing_options)}")
         else:
-            print(f"   ⚙️  Text processing: disabled (original names)")
+            print(f"   ⚙️ Text processing: disabled (original names)")
         
         print()
     else:
@@ -426,7 +910,7 @@ def print_stats_report(cfg: dict):
     
     # Connection health check
     if not cfg.get("verify_ssl", True):
-        print("⚠️  SSL VERIFICATION: Disabled")
+        print("⚠️ SSL VERIFICATION: Disabled")
         print("   WARNING: Only use this in trusted private networks")
         print()
     
@@ -434,20 +918,24 @@ def print_stats_report(cfg: dict):
     if cfg.get('artist_textsearch_transliterate_unicode', True):
         try:
             from unidecode import unidecode
-            print("🌍 UNICODE SUPPORT: Enabled (unidecode available)")
+            print("🌐 UNICODE SUPPORT: Enabled (unidecode available)")
             print("   International artists will be transliterated for better search results")
         except ImportError:
-            print("⚠️  UNICODE SUPPORT: Enabled but unidecode missing!")
+            print("⚠️ UNICODE SUPPORT: Enabled but unidecode missing!")
             print("   Install with: pip install unidecode")
             print("   Falling back to basic normalization (may not work well)")
         print()
     
     # Check for deprecated option usage
     if cfg.get('artist_textsearch_remove_symbols', False):
-        print("⚠️  DEPRECATED OPTION DETECTED:")
+        print("⚠️ DEPRECATED OPTION DETECTED:")
         print("   artist_textsearch_remove_symbols is deprecated and may damage non-Latin text")
         print("   Please update config.ini to use artist_textsearch_transliterate_unicode=true instead")
         print()
+    
+    # Show canary analysis if requested
+    if show_canary_stats:
+        print_canary_analysis(storage)
     
     # Next steps recommendations
     print("🚀 RECOMMENDATIONS:")
@@ -493,6 +981,10 @@ def print_stats_report(cfg: dict):
     if phases_enabled:
         print(f"   • Next run will execute: {', '.join(phases_enabled)}")
     
+    if not show_canary_stats and storage_type == "sqlite":
+        print("   • Run with --canary-stats for detailed canary target breakdown")
+        print("   • Run with --cf-cache-stats for CloudFlare cache performance analysis")
+    
     print()
     print("=" * 60)
 
@@ -502,6 +994,10 @@ def main():
         description="Generate statistics report for Lidarr cache warmer"
     )
     parser.add_argument("--config", required=True, help="Path to INI config (e.g., /data/config.ini)")
+    parser.add_argument("--canary-stats", action="store_true", 
+                        help="Include detailed canary response target analysis (requires SQLite storage)")
+    parser.add_argument("--cf-cache-stats", action="store_true",
+                        help="Include detailed CloudFlare cache status analysis (requires SQLite storage)")
     args = parser.parse_args()
 
     try:
@@ -518,7 +1014,55 @@ def main():
             print(f"  - {issue}", file=sys.stderr)
         sys.exit(2)
 
-    print_stats_report(cfg)
+    # Warn about analysis limitations
+    storage_type = cfg.get("storage_type", "csv").lower()
+    
+    if args.canary_stats and storage_type != "sqlite":
+        print("⚠️ WARNING: --canary-stats with CSV storage provides very limited data!", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("   CSV storage only shows current canary targets from ledger entries.", file=sys.stderr)
+        print("   You will NOT get:", file=sys.stderr)
+        print("   • Success rate breakdowns by canary target", file=sys.stderr)
+        print("   • Historical canary response tracking", file=sys.stderr)
+        print("   • Time-based canary analysis", file=sys.stderr)
+        print("   • Detailed operation breakdowns", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("   For full canary analysis, switch to SQLite storage:", file=sys.stderr)
+        print("   1. Update config.ini: storage_type = sqlite", file=sys.stderr)
+        print("   2. Run cache warmer to start collecting detailed data", file=sys.stderr)
+        print("   3. Re-run stats with --canary-stats for full breakdown", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("   Continuing with limited CSV analysis...", file=sys.stderr)
+        print("=" * 60, file=sys.stderr)
+
+    if args.cf_cache_stats and storage_type != "sqlite":
+        print("⚠️ WARNING: --cf-cache-stats with CSV storage provides very limited data!", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("   CSV storage only shows current CF cache status from ledger entries.", file=sys.stderr)
+        print("   You will NOT get:", file=sys.stderr)
+        print("   • Cache hit rate analysis over time", file=sys.stderr)
+        print("   • Historical cache performance tracking", file=sys.stderr)
+        print("   • Backend load impact analysis", file=sys.stderr)
+        print("   • Detailed operation breakdowns", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("   For full CF cache analysis, switch to SQLite storage:", file=sys.stderr)
+        print("   1. Update config.ini: storage_type = sqlite", file=sys.stderr)
+        print("   2. Run cache warmer to start collecting detailed data", file=sys.stderr)
+        print("   3. Re-run stats with --cf-cache-stats for full breakdown", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("   Continuing with limited CSV analysis...", file=sys.stderr)
+        print("=" * 60, file=sys.stderr)
+
+    print_stats_report(cfg, args.canary_stats)
+    
+    # Show CF cache analysis if requested
+    if args.cf_cache_stats:
+        # Create storage backend to access CF cache data
+        try:
+            storage = create_storage_backend(cfg)
+            print_cf_cache_analysis(storage)
+        except Exception as e:
+            print(f"❌ Error accessing storage for CF cache analysis: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":
