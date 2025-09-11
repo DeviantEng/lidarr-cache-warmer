@@ -555,11 +555,11 @@ def print_cf_cache_analysis(storage) -> None:
         
         print()
         
-        # Calculate key metrics for user-friendly summary
-        hit_200_count = 0
-        stale_200_count = 0
-        stale_503_count = 0
-        other_failures_count = 0
+        # Calculate key metrics based on actual behavior, not just cache status
+        hit_responses = 0
+        cached_success_responses = 0  # STALE + 200 (cached successful responses)
+        cached_error_responses = 0    # STALE + 503 (cached error responses)
+        other_responses = 0
         
         if hasattr(storage, 'db_path') and os.path.exists(storage.db_path):
             try:
@@ -583,126 +583,98 @@ def print_cf_cache_analysis(storage) -> None:
                         success = bool(row["success"])
                         count = row["count"]
                         
-                        if cf_status == "HIT" and success and status_code == "200":
-                            hit_200_count = count
+                        if cf_status == "HIT" and success:
+                            hit_responses += count
                         elif cf_status == "STALE" and success and status_code == "200":
-                            stale_200_count = count
+                            cached_success_responses += count
                         elif cf_status == "STALE" and not success and status_code == "503":
-                            stale_503_count = count
-                        elif not success and status_code in ["404", "500"]:
-                            other_failures_count += count
+                            cached_error_responses += count
+                        else:
+                            other_responses += count
                         
             except Exception:
                 pass
         
-        # User-friendly summary
-        print("📋 CACHE WARMING EFFECTIVENESS:")
-        
-        if hit_200_count > 0:
-            hit_percentage = (hit_200_count / total_requests) * 100
-            print(f"   ✅ Successfully served from cache: {hit_200_count:,} requests ({hit_percentage:.1f}%)")
-            print(f"      Cache is working - no backend load")
-            print()
-        
-        if stale_200_count > 0:
-            stale_200_percentage = (stale_200_count / total_requests) * 100
-            print(f"   ⚡ Fresh data served & cache updated: {stale_200_count:,} requests ({stale_200_percentage:.1f}%)")
-            print(f"      Cache warming succeeded - backend refreshed cache")
-            print()
-        
-        if stale_503_count > 0:
-            stale_503_percentage = (stale_503_count / total_requests) * 100
-            print(f"   ❌ Backend refresh failed (rate limited): {stale_503_count:,} requests ({stale_503_percentage:.1f}%)")
-            print(f"      Cache warming triggered but backend overloaded")
-            print()
-        
-        if other_failures_count > 0:
-            other_percentage = (other_failures_count / total_requests) * 100
-            print(f"   ❌ Other failures (404/500): {other_failures_count:,} requests ({other_percentage:.1f}%)")
-            print(f"      Content issues or backend errors")
-            print()
-        
-        # Calculate overall effectiveness
-        successful_requests = hit_200_count + stale_200_count
-        if total_requests > 0:
-            overall_effectiveness = (successful_requests / total_requests) * 100
-            print(f"📊 OVERALL: {overall_effectiveness:.1f}% cache effectiveness (successful cache + successful refresh)")
-            
-            if stale_200_count > 0:
-                print(f"🎯 Cache warming is working well - {(stale_200_count/total_requests*100):.1f}% of requests successfully triggered backend cache updates")
-            elif hit_200_count > hit_200_count * 0.8:  # More than 80% hits
-                print(f"🎯 Cache is well-warmed - {(hit_200_count/total_requests*100):.1f}% served directly from cache")
-            else:
-                print(f"⚡ Cache warming in progress - building cache coverage")
-        
+        # User-friendly summary based on actual cache behavior
+        print("📋 CLOUDFLARE CACHE ANALYSIS:")
+        print("   Based on investigation of CF cache behavior for this API")
         print()
         
-        # Include other statuses if they exist in significant numbers
-        if hasattr(storage, 'db_path') and os.path.exists(storage.db_path):
-            try:
-                with sqlite3.connect(storage.db_path) as conn:
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.execute("""
-                        SELECT 
-                            cf_cache_status,
-                            status_code,
-                            success,
-                            COUNT(*) as count
-                        FROM cf_cache_responses 
-                        WHERE cf_cache_status != ''
-                        GROUP BY cf_cache_status, status_code, success
-                        HAVING count > ?
-                        ORDER BY count DESC
-                    """, (total_requests * 0.01,))  # Only show statuses that are >1% of total
-                    
-                    other_statuses = []
-                    for row in cursor:
-                        cf_status = row["cf_cache_status"]
-                        status_code = row["status_code"]
-                        success = bool(row["success"])
-                        count = row["count"]
-                        
-                        # Skip the main categories we already covered
-                        if (cf_status == "HIT" and success and status_code == "200") or \
-                           (cf_status == "STALE" and success and status_code == "200") or \
-                           (cf_status == "STALE" and not success and status_code == "503") or \
-                           (not success and status_code in ["404", "500"]):
-                            continue
-                        
-                        percentage = (count / total_requests) * 100
-                        
-                        # Add icon based on status
-                        if cf_status == "MISS":
-                            icon = "🔍"
-                            description = "No cache found, forwarded to backend"
-                        elif cf_status == "EXPIRED":
-                            icon = "⏰"
-                            description = "Cache expired, backend building new entry"
-                        elif cf_status == "DYNAMIC":
-                            icon = "🔄"
-                            description = "Dynamic content, bypassed cache"
-                        else:
-                            icon = "❓"
-                            description = f"Other cache behavior"
-                        
-                        outcome = "SUCCESS" if success else "FAILED"
-                        other_statuses.append({
-                            "icon": icon,
-                            "description": f"{cf_status} + {status_code} {outcome}",
-                            "detail": description,
-                            "count": count,
-                            "percentage": percentage
-                        })
-                    
-                    if other_statuses:
-                        print("📋 OTHER CACHE BEHAVIORS:")
-                        for status in other_statuses:
-                            print(f"   {status['icon']} {status['description']}: {status['count']:,} requests ({status['percentage']:.1f}%)")
-                            print(f"      {status['detail']}")
-                            print()
-                        
-            except Exception:
-                pass
+        if hit_responses > 0:
+            hit_percentage = (hit_responses / total_requests) * 100
+            print(f"   ✅ Served from active cache: {hit_responses:,} requests ({hit_percentage:.1f}%)")
+            print(f"      True cache hits - optimal performance")
+            print()
+        
+        if cached_success_responses > 0:
+            cached_success_percentage = (cached_success_responses / total_requests) * 100
+            print(f"   📋 Served from cached success responses: {cached_success_responses:,} requests ({cached_success_percentage:.1f}%)")
+            print(f"      CF serving cached 200 responses (includes cached backend headers)")
+            print()
+        
+        if cached_error_responses > 0:
+            cached_error_percentage = (cached_error_responses / total_requests) * 100
+            print(f"   ❌ Served from cached error responses: {cached_error_responses:,} requests ({cached_error_percentage:.1f}%)")
+            print(f"      CF serving cached 503 responses from previous backend failures")
+            print()
+        
+        if other_responses > 0:
+            other_percentage = (other_responses / total_requests) * 100
+            print(f"   ❓ Other cache behaviors: {other_responses:,} requests ({other_percentage:.1f}%)")
+            print(f"      MISS, EXPIRED, or other CF cache statuses")
+            print()
+        
+        # Calculate effective cache performance
+        effective_cached_responses = hit_responses + cached_success_responses
+        if total_requests > 0:
+            cache_effectiveness = (effective_cached_responses / total_requests) * 100
+            print(f"📊 CACHE EFFECTIVENESS: {cache_effectiveness:.1f}% of requests served from CF cache")
+            print(f"   • {hit_responses:,} from active cache (HIT)")
+            print(f"   • {cached_success_responses:,} from cached successful responses (STALE + 200)")
+            print()
+            
+            if cache_effectiveness >= 80:
+                print(f"🎯 Excellent cache coverage - most requests served from CF cache")
+            elif cache_effectiveness >= 50:
+                print(f"👍 Good cache coverage - majority of requests cached")
+            else:
+                print(f"⚡ Building cache coverage - {cache_effectiveness:.1f}% cached so far")
+            
+            if cached_error_responses > 0:
+                error_rate = (cached_error_responses / total_requests) * 100
+                print(f"⚠️  {error_rate:.1f}% of requests hitting cached backend errors")
+                print(f"   Consider investigating backend availability issues")
+        
+        print()
+        print("📝 UNDERSTANDING CF CACHE STATUS FOR THIS API:")
+        print("   • HIT = CF serving from active cache (fastest)")
+        print("   • STALE + 200 = CF serving cached successful response")
+        print("   • STALE + 503 = CF serving cached error response") 
+        print("   • CF cache status headers don't follow standard HTTP semantics for this API")
+        print("   • Backend headers in STALE responses are cached, not from live backend contact")
+        print()
+        
+        # Show cache warming insights
+        print("🔍 CACHE WARMING INSIGHTS:")
+        
+        backend_contact_rate = 100 - cache_effectiveness if total_requests > 0 else 0
+        if backend_contact_rate < 20:
+            print("   ✅ Cache warming has been effective - most content is cached")
+            print("   📈 Focus on maintaining cache coverage and monitoring for cache expiration")
+        elif backend_contact_rate < 50:
+            print("   ⚡ Cache warming is building coverage steadily")
+            print("   🎯 Continue cache warming to improve coverage")
+        else:
+            print("   🚀 Active cache warming in progress")
+            print("   ⏳ Expect cache coverage to improve as warming continues")
+        
+        if cached_error_responses > hit_responses:
+            print("   ⚠️  More cached errors than cache hits detected")
+            print("   🔧 Consider addressing backend reliability issues")
+        
+        print("   💡 This API uses non-standard CF caching - cached responses marked as STALE")
+        
+        print()
         
     except Exception as e:
         print(f"❌ Error analyzing CloudFlare cache data: {e}")
