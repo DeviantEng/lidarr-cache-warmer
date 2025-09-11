@@ -597,25 +597,27 @@ def print_cf_cache_analysis(storage) -> None:
         
         # User-friendly summary based on actual cache behavior
         print("📋 CLOUDFLARE CACHE ANALYSIS:")
-        print("   Based on investigation of CF cache behavior for this API")
         print()
         
         if hit_responses > 0:
             hit_percentage = (hit_responses / total_requests) * 100
             print(f"   ✅ Served from active cache: {hit_responses:,} requests ({hit_percentage:.1f}%)")
             print(f"      True cache hits - optimal performance")
+            print(f"      (cf-cache-status: HIT + HTTP Code: 200)")
             print()
         
         if cached_success_responses > 0:
             cached_success_percentage = (cached_success_responses / total_requests) * 100
-            print(f"   📋 Served from cached success responses: {cached_success_responses:,} requests ({cached_success_percentage:.1f}%)")
-            print(f"      CF serving cached 200 responses (includes cached backend headers)")
+            print(f"   📋 Served cached successful responses: {cached_success_responses:,} requests ({cached_success_percentage:.1f}%)")
+            print(f"      CF serving cached 200 responses with full payload (marked as STALE)")
+            print(f"      (cf-cache-status: STALE + HTTP Code: 200)")
             print()
         
         if cached_error_responses > 0:
             cached_error_percentage = (cached_error_responses / total_requests) * 100
-            print(f"   ❌ Served from cached error responses: {cached_error_responses:,} requests ({cached_error_percentage:.1f}%)")
-            print(f"      CF serving cached 503 responses from previous backend failures")
+            print(f"   ❌ Served cached error responses: {cached_error_responses:,} requests ({cached_error_percentage:.1f}%)")
+            print(f"      CF serving cached 503 responses - no useful payload")
+            print(f"      (cf-cache-status: STALE + HTTP Code: 503)")
             print()
         
         if other_responses > 0:
@@ -624,55 +626,15 @@ def print_cf_cache_analysis(storage) -> None:
             print(f"      MISS, EXPIRED, or other CF cache statuses")
             print()
         
-        # Calculate effective cache performance
-        effective_cached_responses = hit_responses + cached_success_responses
+        # Calculate useful response rate
+        useful_responses = hit_responses + cached_success_responses
         if total_requests > 0:
-            cache_effectiveness = (effective_cached_responses / total_requests) * 100
-            print(f"📊 CACHE EFFECTIVENESS: {cache_effectiveness:.1f}% of requests served from CF cache")
-            print(f"   • {hit_responses:,} from active cache (HIT)")
-            print(f"   • {cached_success_responses:,} from cached successful responses (STALE + 200)")
-            print()
-            
-            if cache_effectiveness >= 80:
-                print(f"🎯 Excellent cache coverage - most requests served from CF cache")
-            elif cache_effectiveness >= 50:
-                print(f"👍 Good cache coverage - majority of requests cached")
-            else:
-                print(f"⚡ Building cache coverage - {cache_effectiveness:.1f}% cached so far")
+            useful_rate = (useful_responses / total_requests) * 100
+            print(f"📊 USEFUL RESPONSES: {useful_rate:.1f}% of requests returned actual data")
             
             if cached_error_responses > 0:
                 error_rate = (cached_error_responses / total_requests) * 100
-                print(f"⚠️  {error_rate:.1f}% of requests hitting cached backend errors")
-                print(f"   Consider investigating backend availability issues")
-        
-        print()
-        print("📝 UNDERSTANDING CF CACHE STATUS FOR THIS API:")
-        print("   • HIT = CF serving from active cache (fastest)")
-        print("   • STALE + 200 = CF serving cached successful response")
-        print("   • STALE + 503 = CF serving cached error response") 
-        print("   • CF cache status headers don't follow standard HTTP semantics for this API")
-        print("   • Backend headers in STALE responses are cached, not from live backend contact")
-        print()
-        
-        # Show cache warming insights
-        print("🔍 CACHE WARMING INSIGHTS:")
-        
-        backend_contact_rate = 100 - cache_effectiveness if total_requests > 0 else 0
-        if backend_contact_rate < 20:
-            print("   ✅ Cache warming has been effective - most content is cached")
-            print("   📈 Focus on maintaining cache coverage and monitoring for cache expiration")
-        elif backend_contact_rate < 50:
-            print("   ⚡ Cache warming is building coverage steadily")
-            print("   🎯 Continue cache warming to improve coverage")
-        else:
-            print("   🚀 Active cache warming in progress")
-            print("   ⏳ Expect cache coverage to improve as warming continues")
-        
-        if cached_error_responses > hit_responses:
-            print("   ⚠️  More cached errors than cache hits detected")
-            print("   🔧 Consider addressing backend reliability issues")
-        
-        print("   💡 This API uses non-standard CF caching - cached responses marked as STALE")
+                print(f"⚠️  {error_rate:.1f}% of requests returned cached errors (useless)")
         
         print()
         
