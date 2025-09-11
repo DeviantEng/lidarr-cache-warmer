@@ -555,8 +555,11 @@ def print_cf_cache_analysis(storage) -> None:
         
         print()
         
-        # Get cross-tabulation data from SQLite if available
-        cross_tab_data = {}
+        # Calculate key metrics based on actual behavior, not just cache status
+        hit_responses = 0
+        cached_success_responses = 0  # STALE + 200 (cached successful responses)
+        cached_error_responses = 0    # STALE + 503 (cached error responses)
+        other_responses = 0
         
         if hasattr(storage, 'db_path') and os.path.exists(storage.db_path):
             try:
@@ -580,135 +583,60 @@ def print_cf_cache_analysis(storage) -> None:
                         success = bool(row["success"])
                         count = row["count"]
                         
-                        if cf_status not in cross_tab_data:
-                            cross_tab_data[cf_status] = {}
+                        if cf_status == "HIT" and success:
+                            hit_responses += count
+                        elif cf_status == "STALE" and success and status_code == "200":
+                            cached_success_responses += count
+                        elif cf_status == "STALE" and not success and status_code == "503":
+                            cached_error_responses += count
+                        else:
+                            other_responses += count
                         
-                        outcome = "SUCCESS" if success else "TIMEOUT"
-                        key = f"{status_code} {outcome}"
-                        cross_tab_data[cf_status][key] = count
-                        
-            except Exception as e:
-                print(f"   (Could not retrieve detailed cross-tabulation: {e})")
+            except Exception:
+                pass
         
-        # Calculate true cache effectiveness
-        true_cache_hits = cache_hits  # HIT responses
-        successful_stale = 0
-        backend_contacted = total_requests - cache_hits
-        
-        if "STALE" in cf_stats:
-            successful_stale = cf_stats["STALE"]["successful_requests"]
-        
-        true_cache_effectiveness = ((true_cache_hits + successful_stale) / total_requests * 100) if total_requests > 0 else 0.0
-        
-        print("📋 CACHE EFFECTIVENESS SUMMARY:")
-        print(f"   ✅ Effective cache responses: {true_cache_hits + successful_stale:,} ({true_cache_effectiveness:.1f}%)")
-        print(f"      • True cache hits (HIT): {true_cache_hits:,}")
-        print(f"      • Successful stale refresh: {successful_stale:,}")
-        print(f"   🔄 Backend contacted: {backend_contacted:,} ({(backend_contacted/total_requests*100):.1f}%)")
-        
-        if true_cache_effectiveness >= 70:
-            print(f"   🎯 Excellent cache performance!")
-        elif true_cache_effectiveness >= 40:
-            print(f"   👍 Good cache performance")
-        else:
-            print(f"   ⚡ Cache warming actively building cache")
-        
+        # User-friendly summary based on actual cache behavior
+        print("📋 CLOUDFLARE CACHE ANALYSIS:")
         print()
         
-        # Cross-tabulation breakdown
-        if cross_tab_data:
-            print("☁️ CACHE STATUS vs BACKEND RESPONSE:")
+        if hit_responses > 0:
+            hit_percentage = (hit_responses / total_requests) * 100
+            print(f"   ✅ Served from active cache: {hit_responses:,} requests ({hit_percentage:.1f}%)")
+            print(f"      True cache hits - optimal performance")
+            print(f"      (cf-cache-status: HIT + HTTP Code: 200)")
             print()
-            
-            # Define status order and icons
-            status_order = ["HIT", "STALE", "MISS", "EXPIRED", "DYNAMIC"]
-            status_info = {
-                "HIT": {"icon": "✅", "desc": "served from CF cache"},
-                "STALE": {"icon": "⚠️", "desc": "CF had stale content, contacted backend"},
-                "MISS": {"icon": "❌", "desc": "no CF cache, forwarded to backend"},
-                "EXPIRED": {"icon": "🔄", "desc": "cache expired, no stale available"},
-                "DYNAMIC": {"icon": "🔄", "desc": "dynamic content, bypassed cache"}
-            }
-            
-            for cf_status in status_order:
-                if cf_status not in cross_tab_data:
-                    continue
-                    
-                info = status_info.get(cf_status, {"icon": "❓", "desc": f"other status: {cf_status}"})
-                total_for_status = sum(cross_tab_data[cf_status].values())
-                percentage = (total_for_status / total_requests * 100)
-                
-                print(f"{info['icon']} {cf_status} ({info['desc']}):")
-                print(f"   Total: {total_for_status:,} requests ({percentage:.1f}%)")
-                
-                # Sort by count (descending)
-                sorted_outcomes = sorted(cross_tab_data[cf_status].items(), key=lambda x: x[1], reverse=True)
-                
-                for outcome, count in sorted_outcomes:
-                    outcome_percentage = (count / total_for_status * 100) if total_for_status > 0 else 0
-                    
-                    # Parse outcome
-                    if "SUCCESS" in outcome:
-                        outcome_icon = "✅"
-                    else:
-                        outcome_icon = "❌"
-                    
-                    print(f"   {outcome_icon} {outcome}: {count:,} requests ({outcome_percentage:.1f}%)")
-                
-                print()
-            
-            # Show any remaining statuses not in our predefined list
-            for cf_status in cross_tab_data:
-                if cf_status not in status_order:
-                    total_for_status = sum(cross_tab_data[cf_status].values())
-                    percentage = (total_for_status / total_requests * 100)
-                    
-                    print(f"❓ {cf_status} (other cache status):")
-                    print(f"   Total: {total_for_status:,} requests ({percentage:.1f}%)")
-                    
-                    sorted_outcomes = sorted(cross_tab_data[cf_status].items(), key=lambda x: x[1], reverse=True)
-                    for outcome, count in sorted_outcomes:
-                        outcome_percentage = (count / total_for_status * 100) if total_for_status > 0 else 0
-                        outcome_icon = "✅" if "SUCCESS" in outcome else "❌"
-                        print(f"   {outcome_icon} {outcome}: {count:,} requests ({outcome_percentage:.1f}%)")
-                    print()
         
-        else:
-            # Fallback to simple breakdown if cross-tabulation not available
-            print("☁️ CACHE STATUS BREAKDOWN:")
-            print("   (Cross-tabulation requires SQLite storage with detailed tracking)")
+        if cached_success_responses > 0:
+            cached_success_percentage = (cached_success_responses / total_requests) * 100
+            print(f"   📋 Served cached successful responses: {cached_success_responses:,} requests ({cached_success_percentage:.1f}%)")
+            print(f"      CF serving cached 200 responses with full payload (marked as STALE)")
+            print(f"      (cf-cache-status: STALE + HTTP Code: 200)")
             print()
+        
+        if cached_error_responses > 0:
+            cached_error_percentage = (cached_error_responses / total_requests) * 100
+            print(f"   ❌ Served cached error responses: {cached_error_responses:,} requests ({cached_error_percentage:.1f}%)")
+            print(f"      CF serving cached 503 responses - no useful payload")
+            print(f"      (cf-cache-status: STALE + HTTP Code: 503)")
+            print()
+        
+        if other_responses > 0:
+            other_percentage = (other_responses / total_requests) * 100
+            print(f"   ❓ Other cache behaviors: {other_responses:,} requests ({other_percentage:.1f}%)")
+            print(f"      MISS, EXPIRED, or other CF cache statuses")
+            print()
+        
+        # Calculate useful response rate
+        useful_responses = hit_responses + cached_success_responses
+        if total_requests > 0:
+            useful_rate = (useful_responses / total_requests) * 100
+            print(f"📊 USEFUL RESPONSES: {useful_rate:.1f}% of requests returned actual data")
             
-            # Sort by request count (highest first)
-            sorted_statuses = sorted(cf_stats.items(), key=lambda x: x[1]["total_requests"], reverse=True)
-            
-            for status, status_data in sorted_statuses:
-                count = status_data["total_requests"]
-                percentage = (count / total_requests) * 100
-                
-                # Add icons and descriptions
-                if status == "HIT":
-                    icon = "✅"
-                    description = "Served directly from CloudFlare cache"
-                elif status == "STALE":
-                    icon = "⚠️"
-                    description = "Served stale content while backend rebuilds cache"
-                elif status == "MISS":
-                    icon = "❌"
-                    description = "No cache entry found, forwarded to backend"
-                elif status == "EXPIRED":
-                    icon = "🔄"
-                    description = "Cache expired, no stale content available, backend building new entry"
-                elif status == "DYNAMIC":
-                    icon = "🔄"
-                    description = "Dynamic content, bypasses cache entirely"
-                else:
-                    icon = "❓"
-                    description = f"Other cache status: {status}"
-                
-                print(f"   {icon} {status}: {count:,} requests ({percentage:.1f}%)")
-                print(f"      {description}")
-                print()
+            if cached_error_responses > 0:
+                error_rate = (cached_error_responses / total_requests) * 100
+                print(f"⚠️  {error_rate:.1f}% of requests returned cached errors (useless)")
+        
+        print()
         
     except Exception as e:
         print(f"❌ Error analyzing CloudFlare cache data: {e}")
