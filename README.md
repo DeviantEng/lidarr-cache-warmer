@@ -1,3 +1,12 @@
+# 📣 Project Status 📣
+With the Servarr team nearing full deployment of the new Lidarr API, this project has largely fulfilled its purpose. As such, I don’t anticipate adding new features or investing significant time going forward—unless a compelling use case arises. I’ll continue to offer support where possible, but the project's end is in sight.
+
+To everyone who ran this software: thank you. Your participation helped test, validate, and build out the API cache during a critical development phase. The Servarr community truly appreciates your contributions.  🙏
+
+On a personal note, I’m grateful for all the feedback and kind words shared with me throughout this project. Thank you!  💙
+
+---
+
 # lidarr-cache-warmer
 
 Cache warming tool for **Lidarr** metadata. Fetches artist and release group MBIDs from your Lidarr instance and repeatedly probes them against an API endpoint until successful, triggering cache generation in the backend.
